@@ -91,8 +91,6 @@ def render_predicted(pc : dict,
         scales = scales,
         rotations = rotations,
         cov3D_precomp = cov3D_precomp)
-
-    print(rast)
     
     rendered_image = rast[0]
     radii = rast[1]
