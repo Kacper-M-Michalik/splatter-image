@@ -29,8 +29,7 @@ class Metricator():
         return psnr, ssim, lpips
 
 @torch.no_grad()
-def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folder=None
-                     ):
+def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folder=None):
     """
     Runs evaluation on the dataset passed in the dataloader. 
     Computes, prints and saves PSNR, SSIM, LPIPS.
@@ -39,10 +38,13 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
     """
 
     if save_vis > 0:
-
         os.makedirs(out_folder, exist_ok=True)
 
-    with open("scores.txt", "w+") as f:
+    score_path = args.score_path
+    if score_path is None:
+       score_path = "scores.txt" 
+
+    with open(score_path, "w+") as f:
         f.write("")
 
     bg_color = [1, 1, 1] if model_cfg.data.white_background else [0, 0, 0]
@@ -136,7 +138,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
         ssim_all_examples_novel.append(sum(ssim_all_renders_novel) / len(ssim_all_renders_novel))
         lpips_all_examples_novel.append(sum(lpips_all_renders_novel) / len(lpips_all_renders_novel))
 
-        with open("scores.txt", "a+") as f:
+        with open(score_path, "a+") as f:
             f.write("{}_".format(d_idx) + example_id + \
                     " " + str(psnr_all_examples_novel[-1]) + \
                     " " + str(ssim_all_examples_novel[-1]) + \
@@ -302,6 +304,7 @@ def parse_arguments():
                         You can also use this to evaluate on the training or validation splits.')
     parser.add_argument('--out_folder', type=str, default='out', help='Output folder to save renders (default: out)')
     parser.add_argument('--save_vis', type=int, default=0, help='Number of examples for which to save renders (default: 0)')
+    parser.add_argument('--score_path', type=str, default=None, help='Full path for output file of inference scores (default: ./scores.txt)')
     return parser.parse_args()
 
 if __name__ == "__main__":
