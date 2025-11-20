@@ -50,7 +50,8 @@ def render_predicted(pc : dict,
         sh_degree=cfg.model.max_sh_degree,
         campos=camera_center,
         prefiltered=False,
-        debug=False
+        debug=False,
+        antialiasing=False
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
