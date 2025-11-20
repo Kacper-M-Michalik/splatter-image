@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from gaussian_renderer import render_predicted
 from scene.gaussian_predictor import GaussianSplatPredictor
-from datasets.dataset_factory import get_dataset
+from splatter_datasets.dataset_factory import get_dataset
 from utils.loss_utils import ssim as ssim_fn
 
 class Metricator():
@@ -270,7 +270,7 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
 
     # load model
     model = GaussianSplatPredictor(training_cfg)
-    ckpt_loaded = torch.load(model_path, map_location=device)
+    ckpt_loaded = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt_loaded["model_state_dict"])
     model = model.to(device)
     model.eval()

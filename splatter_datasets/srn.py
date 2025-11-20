@@ -11,12 +11,8 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getView2Wo
 
 from .shared_dataset import SharedDataset
 
-SHAPENET_DATASET_ROOT = None # Change this to your data directory
-assert SHAPENET_DATASET_ROOT is not None, "Update the location of the SRN Shapenet Dataset"
-
 class SRNDataset(SharedDataset):
-    def __init__(self, cfg,
-                 dataset_name="train"):
+    def __init__(self, cfg, dataset_root, dataset_name="train"):
         super().__init__()
         self.cfg = cfg
 
@@ -24,7 +20,8 @@ class SRNDataset(SharedDataset):
         if dataset_name == "vis":
             self.dataset_name = "test"
 
-        self.base_path = os.path.join(SHAPENET_DATASET_ROOT, "srn_{}/{}_{}".format(cfg.data.category,
+        
+        self.base_path = os.path.join(dataset_root, "srn_{}/{}_{}".format(cfg.data.category,
                                                                                    cfg.data.category,
                                                                                    self.dataset_name))
 

@@ -12,19 +12,17 @@ from .objaverse import ObjaverseDataset
 
 from utils.graphics_utils import getProjectionMatrix
 
-GSO_ROOT = None # Change this to your data directory
-assert GSO_ROOT is not None, "Update path of the dataset"
-
 class GSODataset(ObjaverseDataset):
     def __init__(self,
                  cfg,
+                 dataset_root,
                  dataset_name = "test",
                  ) -> None:
         
         super(GSODataset).__init__()
 
         self.cfg = cfg
-        self.root_dir = GSO_ROOT
+        self.root_dir = dataset_root
         assert dataset_name != "train", "No training on GSO dataset!"
 
         self.dataset_name = dataset_name

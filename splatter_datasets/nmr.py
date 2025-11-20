@@ -15,16 +15,13 @@ from utils.camera_utils import get_loop_cameras
 
 from .shared_dataset import SharedDataset
 
-NMR_DATASET_ROOT = None # Change this to your data directory
-assert NMR_DATASET_ROOT is not None, "Update path of the dataset"
-
 class NMRDataset(SharedDataset):
     """
     Dataset from DVR (Niemeyer et al. 2020)
     Provides NMR renderings
     """
 
-    def __init__(self, cfg, 
+    def __init__(self, cfg, dataset_root,
                  dataset_name="train"
                  ) -> None:
         super().__init__()
@@ -32,7 +29,7 @@ class NMRDataset(SharedDataset):
         self.dataset_name = dataset_name
 
         # first check if the dataset is already on the local machine
-        self.base_path = NMR_DATASET_ROOT
+        self.base_path = dataset_root
 
         list_prefix = "softras_"
 

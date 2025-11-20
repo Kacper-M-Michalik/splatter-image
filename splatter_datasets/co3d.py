@@ -23,11 +23,8 @@ from .dataset_readers import readCamerasFromNpy
 from utils.general_utils import matrix_to_quaternion
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getView2World, fov2focal
 
-CO3D_DATASET_ROOT = None # Change this to where you saved preprocessed data
-assert CO3D_DATASET_ROOT is not None, "Update the location of the CO3D Dataset"
-
 class CO3DDataset(SharedDataset):
-    def __init__(self, cfg,
+    def __init__(self, cfg, dataset_root,
                  dataset_name="train"):
         super().__init__()
         self.cfg = cfg
@@ -37,7 +34,7 @@ class CO3DDataset(SharedDataset):
 
         # assumes cfg.data.category ends with an "s", for example hydrantS, which
         # is not included in the dataset name 
-        self.base_path = os.path.join(CO3D_DATASET_ROOT, 
+        self.base_path = os.path.join(dataset_root, 
                                       "co3d_{}_for_gs".format(cfg.data.category[:-1]), 
                                       self.dataset_name)
 
