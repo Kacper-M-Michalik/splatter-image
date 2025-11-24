@@ -21,10 +21,10 @@ from gaussian_renderer import render_predicted
 from scene.gaussian_predictor import GaussianSplatPredictor
 from datasets.dataset_factory import get_dataset
 
-
 @hydra.main(version_base=None, config_path='configs', config_name="default_config")
 def main(cfg: DictConfig):
 
+    # Prepare hardware
     torch.set_float32_matmul_precision('high')
     if cfg.general.mixed_precision:
         fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices, strategy="ddp",
@@ -33,6 +33,7 @@ def main(cfg: DictConfig):
         fabric = Fabric(accelerator="cuda", devices=cfg.general.num_devices, strategy="ddp")
     fabric.launch()
 
+    # Logging setup
     if fabric.is_global_zero:
         vis_dir = os.getcwd()
 
@@ -55,9 +56,11 @@ def main(cfg: DictConfig):
     first_iter = 0
     device = safe_state(cfg)
 
+    # Create model   
     gaussian_predictor = GaussianSplatPredictor(cfg)
     gaussian_predictor = gaussian_predictor.to(memory_format=torch.channels_last)
 
+    # Prepare learning params
     l = []
     if cfg.model.network_with_offset:
         l.append({'params': gaussian_predictor.network_with_offset.parameters(), 
@@ -67,6 +70,8 @@ def main(cfg: DictConfig):
          'lr': cfg.opt.base_lr})
     optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, 
                                  betas=cfg.opt.betas)
+
+    # TODO: ADD CODE HERE THAT WILL PERFORM WEIGHT GRAFT
 
     # Resuming training
     if fabric.is_global_zero:
@@ -98,6 +103,7 @@ def main(cfg: DictConfig):
         else:
             best_PSNR = 0.0
 
+    # Set up Exponential Moving Average for training
     if cfg.opt.ema.use and fabric.is_global_zero:
         ema = EMA(gaussian_predictor, 
                   beta=cfg.opt.ema.beta,
@@ -119,6 +125,7 @@ def main(cfg: DictConfig):
     background = torch.tensor(bg_color, dtype=torch.float32)
     background = fabric.to_device(background)
 
+    # Get datasets
     if cfg.data.category in ["nmr", "objaverse"]:
         num_workers = 12
         persistent_workers = True
@@ -146,7 +153,7 @@ def main(cfg: DictConfig):
                                  batch_size=1,
                                  shuffle=True)
     
-    # distribute model and training dataset
+    # Distribute model and training dataset
     gaussian_predictor, optimizer = fabric.setup(
         gaussian_predictor, optimizer
     )
@@ -154,6 +161,7 @@ def main(cfg: DictConfig):
     
     gaussian_predictor.train()
 
+    # Training
     print("Beginning training")
     first_iter += 1
     iteration = first_iter
@@ -169,21 +177,35 @@ def main(cfg: DictConfig):
             # =============== Prepare input ================
             rot_transform_quats = data["source_cv2wT_quat"][:, :cfg.data.input_images]
 
+            # Concatenate selected priors
+            input_images = data["gt_images"][:, :cfg.data.input_images, ...]
+            if cfg.data.use_depth_preds:
+                assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
+                input_images = torch.cat([input_images,
+                                data["pred_depths"][:, :cfg.data.input_images, ...]],
+                                dim=2)
+            if cfg.data.use_normal_preds:
+                assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
+                input_images = torch.cat([input_images,
+                                data["pred_normals"][:, :cfg.data.input_images, ...]],
+                                dim=2)
+
+            # Get focal info and depth for CO3D data
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                 focals_pixels_pred = data["focals_pixels"][:, :cfg.data.input_images, ...]
-                input_images = torch.cat([data["gt_images"][:, :cfg.data.input_images, ...],
+                input_images = torch.cat([input_images,
                                 data["origin_distances"][:, :cfg.data.input_images, ...]],
                                 dim=2)
             else:
                 focals_pixels_pred = None
-                input_images = data["gt_images"][:, :cfg.data.input_images, ...]
 
+            # Predict
             gaussian_splats = gaussian_predictor(input_images,
                                                 data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                 rot_transform_quats,
                                                 focals_pixels_pred)
 
-
+            # CO3D specific processing
             if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                 # regularize very big gaussians
                 if len(torch.where(gaussian_splats["scaling"] > 20)[0]) > 0:
@@ -201,6 +223,7 @@ def main(cfg: DictConfig):
                         len(torch.where(gaussian_splats["scaling"] < 1e-5)[0]), iteration))
                 else:
                     small_gaussian_reg_loss = 0.0
+
             # Render
             l12_loss_sum = 0.0
             lpips_loss_sum = 0.0
@@ -212,10 +235,12 @@ def main(cfg: DictConfig):
                 # does not support batching
                 gaussian_splat_batch = {k: v[b_idx].contiguous() for k, v in gaussian_splats.items()}
                 for r_idx in range(cfg.data.input_images, data["gt_images"].shape[1]):
+                    # Get focial info if present (only present for CO3D)
                     if "focals_pixels" in data.keys():
                         focals_pixels_render = data["focals_pixels"][b_idx, r_idx].cpu()
                     else:
                         focals_pixels_render = None
+
                     image = render_predicted(gaussian_splat_batch, 
                                         data["world_view_transforms"][b_idx, r_idx],
                                         data["full_proj_transforms"][b_idx, r_idx],
@@ -223,12 +248,15 @@ def main(cfg: DictConfig):
                                         background,
                                         cfg,
                                         focals_pixels=focals_pixels_render)["render"]
+                    
                     # Put in a list for a later loss computation
                     rendered_images.append(image)
                     gt_image = data["gt_images"][b_idx, r_idx]
                     gt_images.append(gt_image)
+
             rendered_images = torch.stack(rendered_images, dim=0)
             gt_images = torch.stack(gt_images, dim=0)
+
             # Loss computation
             l12_loss_sum = loss_fn(rendered_images, gt_images) 
             if cfg.opt.lambda_lpips != 0:
@@ -329,6 +357,8 @@ def main(cfg: DictConfig):
                         step=iteration)
                     wandb.log({"rot_gt": wandb.Video(np.asarray(test_loop_gt), fps=20, format="mp4")},
                         step=iteration)
+
+            # ======== End of Logging ========
 
             fnames_to_save = []
             # Find out which models to save

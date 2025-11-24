@@ -429,15 +429,15 @@ class SongUNet(nn.Module):
 # NVIDIA copyright does not apply to the code below this line
 
 class SingleImageSongUNetPredictor(nn.Module):
-    def __init__(self, cfg, out_channels, bias, scale):
+    def __init__(self, cfg, in_channels, out_channels, bias, scale):
         super(SingleImageSongUNetPredictor, self).__init__()
         self.out_channels = out_channels
         self.cfg = cfg
+
+        # Calculate embedding info
         if cfg.cam_embd.embedding is None:
-            in_channels = 3
             emb_dim_in = 0
         else:
-            in_channels = 3
             emb_dim_in = 6 * cfg.cam_embd.dimension
 
         self.encoder = SongUNet(cfg.data.training_resolution, 
@@ -460,6 +460,8 @@ class SingleImageSongUNetPredictor(nn.Module):
             nn.init.constant_(
                 self.out.bias[start_channels:start_channels+out_channel], b)
             start_channels += out_channel
+        
+        # TODO: Add lightweight training option, adds Lora here and zeros out non rgb channel intial weights
 
     def forward(self, x, film_camera_emb=None, N_views_xa=1):
         x = self.encoder(x, 
@@ -468,9 +470,9 @@ class SingleImageSongUNetPredictor(nn.Module):
 
         return self.out(x)
 
-def networkCallBack(cfg, name, out_channels, **kwargs):
+def networkCallBack(cfg, name, in_channels, out_channels, **kwargs):
     if name == "SingleUNet":
-        return SingleImageSongUNetPredictor(cfg, out_channels, **kwargs)
+        return SingleImageSongUNetPredictor(cfg, in_channels, out_channels, **kwargs)
     else:
         raise NotImplementedError
 
@@ -480,11 +482,19 @@ class GaussianSplatPredictor(nn.Module):
         self.cfg = cfg
         assert cfg.model.network_with_offset or cfg.model.network_without_offset, \
             "Need at least one network"
+        
+        # Calculate number of input channels        
+        self.in_channels = 3
+        if cfg.data.use_depth_preds:
+            self.in_channels += 1
+        if cfg.data.use_normal_preds:
+            self.in_channels += 3
 
         if cfg.model.network_with_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(True, cfg)
             self.network_with_offset = networkCallBack(cfg, 
                                         cfg.model.name,
+                                        self.in_channels,
                                         split_dimensions,
                                         scale = scale_inits,
                                         bias = bias_inits)
@@ -696,6 +706,7 @@ class GaussianSplatPredictor(nn.Module):
         else:
             N_views_xa = 1
 
+        # Get camera embedding
         if self.cfg.cam_embd.embedding is not None:
             cam_embedding = self.get_camera_embeddings(source_cameras_view_to_world)
             assert self.cfg.cam_embd.method == "film"
@@ -703,22 +714,25 @@ class GaussianSplatPredictor(nn.Module):
         else:
             film_camera_emb = None
 
+        # Get focal data
         if self.cfg.data.category in ["hydrants", "teddybears"]:
             assert focals_pixels is not None
             focals_pixels = focals_pixels.reshape(B*N_views, *focals_pixels.shape[2:])
         else:
             assert focals_pixels is None, "Unexpected argument for non-co3d dataset"
 
+        # Extract const_offsets, keep RGB + Priors
         x = x.reshape(B*N_views, *x.shape[2:])
         if self.cfg.data.origin_distances:
-            const_offset = x[:, 3:, ...]
-            x = x[:, :3, ...]
+            const_offset = x[:, self.in_channels:, ...]
+            x = x[:, :self.in_channels, ...]
         else:
             const_offset = None
 
         source_cameras_view_to_world = source_cameras_view_to_world.reshape(B*N_views, *source_cameras_view_to_world.shape[2:])
         x = x.contiguous(memory_format=torch.channels_last)
 
+        # Runs input through SingleImageSongUNetPredictor
         if self.cfg.model.network_with_offset:
 
             split_network_outputs = self.network_with_offset(x,
@@ -745,6 +759,7 @@ class GaussianSplatPredictor(nn.Module):
 
             pos = self.get_pos_from_network_output(depth, 0.0, focals_pixels, const_offset=const_offset)
 
+        # Make gaussians spherical if isotropic enabled
         if self.cfg.model.isotropic:
             scaling_out = torch.cat([scaling[:, :1, ...], scaling[:, :1, ...], scaling[:, :1, ...]], dim=1)
         else:

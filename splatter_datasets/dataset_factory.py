@@ -1,10 +1,12 @@
 from .srn import SRNDataset
+from .srn_priors import SRNPriorsDataset
 from .co3d import CO3DDataset
 from .nmr import NMRDataset
 from .objaverse import ObjaverseDataset
 from .gso import GSODataset
 
 SHAPENET_DATASET_ROOT = "/content/SRN" # Change this to your data directory
+SHAPENET_PRIORS_DATASET_ROOT = "/content/SRN" # Change this to your data directory
 CO3D_DATASET_ROOT = None # Change this to where you saved preprocessed data
 NMR_DATASET_ROOT = None # Change this to your data directory
 OBJAVERSE_ROOT = None # Change this to your data directory
@@ -15,6 +17,9 @@ def get_dataset(cfg, name):
     if cfg.data.category == "cars" or cfg.data.category == "chairs":
         assert SHAPENET_DATASET_ROOT is not None, "Update the location of the SRN Shapenet Dataset"        
         return SRNDataset(cfg, SHAPENET_DATASET_ROOT, name)
+    if cfg.data.category == "cars_priors" or cfg.data.category == "chairs_priors":
+        assert SHAPENET_PRIORS_DATASET_ROOT is not None, "Update the location of the SRN Shapenet WITH PRIORS Dataset"        
+        return SRNPriorsDataset(cfg, SHAPENET_PRIORS_DATASET_ROOT, name)
     elif cfg.data.category == "hydrants" or cfg.data.category == "teddybears":        
         assert CO3D_DATASET_ROOT is not None, "Update the location of the CO3D Dataset"
         return CO3DDataset(cfg, CO3D_DATASET_ROOT, name)

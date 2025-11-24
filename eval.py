@@ -37,6 +37,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
         save_vis: how many examples will have visualisations saved
     """
 
+    # Make folder for output images
     if save_vis > 0:
         os.makedirs(out_folder, exist_ok=True)
 
@@ -47,10 +48,11 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
     with open(score_path, "w+") as f:
         f.write("")
 
+    # Some Settings
     bg_color = [1, 1, 1] if model_cfg.data.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-    # instantiate metricator
+    # Instantiate metricator
     metricator = Metricator(device)
 
     psnr_all_examples_novel = []
@@ -61,6 +63,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
     ssim_all_examples_cond = []
     lpips_all_examples_cond = []
 
+    # Go through all images for eval
     for d_idx, data in enumerate(tqdm.tqdm(dataloader)):
         psnr_all_renders_novel = []
         ssim_all_renders_novel = []
@@ -69,22 +72,36 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
         ssim_all_renders_cond = []
         lpips_all_renders_cond = []
 
+        # Move data to device
         data = {k: v.to(device) for k, v in data.items()}
 
+        # Get quarternions for input images (typically 1)
         rot_transform_quats = data["source_cv2wT_quat"][:, :model_cfg.data.input_images]
 
+        # ShapeNet and ObajaVerse renders use the same focal info within the dataset, CO3D does not, so requires reading said data
         if model_cfg.data.category == "hydrants" or model_cfg.data.category == "teddybears":
             focals_pixels_pred = data["focals_pixels"][:, :model_cfg.data.input_images, ...]
         else:
             focals_pixels_pred = None
 
-        if model_cfg.data.origin_distances:
-            input_images = torch.cat([data["gt_images"][:, :model_cfg.data.input_images, ...],
-                                      data["origin_distances"][:, :model_cfg.data.input_images, ...]],
-                                      dim=2)
-        else:
-            input_images = data["gt_images"][:, :model_cfg.data.input_images, ...]
+        # Concatenate selected priors
+        input_images = data["gt_images"][:, :model_cfg.data.input_images, ...]
+        if model_cfg.data.use_depth_preds:
+            input_images = torch.cat([input_images,
+                            data["pred_depths"][:, :model_cfg.data.input_images, ...]],
+                            dim=2)
+        if model_cfg.data.use_normal_preds:
+            input_images = torch.cat([input_images,
+                            data["pred_normals"][:, :model_cfg.data.input_images, ...]],
+                            dim=2)
 
+        # Get camera to center depth
+        if model_cfg.data.origin_distances:
+            input_images = torch.cat([input_images,
+                            data["origin_distances"][:, :model_cfg.data.input_images, ...]],
+                            dim=2)
+
+        # Pepare folders for output image
         example_id = dataloader.dataset.get_example_id(d_idx)
         if d_idx < save_vis:
 
@@ -94,17 +111,20 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
             os.makedirs(out_example_gt, exist_ok=True)
             os.makedirs(out_example, exist_ok=True)
 
-        # batch has length 1, the first image is conditioning
+        # Batch has length 1, the first image is conditioning
         reconstruction = model(input_images,
                                data["view_to_world_transforms"][:, :model_cfg.data.input_images, ...],
                                rot_transform_quats,
                                focals_pixels_pred)
 
+        # Calculate metrics
+        # Go through all ground truth images
         for r_idx in range( data["gt_images"].shape[1]):
             if "focals_pixels" in data.keys():
                 focals_pixels_render = data["focals_pixels"][0, r_idx]
             else:
                 focals_pixels_render = None
+
             image = render_predicted({k: v[0].contiguous() for k, v in reconstruction.items()},
                                      data["world_view_transforms"][0, r_idx],
                                      data["full_proj_transforms"][0, r_idx], 
@@ -118,7 +138,8 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
                 torchvision.utils.save_image(image, os.path.join(out_example, '{0:05d}'.format(r_idx) + ".png"))
                 torchvision.utils.save_image(data["gt_images"][0, r_idx, ...], os.path.join(out_example_gt, '{0:05d}'.format(r_idx) + ".png"))
 
-            # exclude non-foreground images from metric computation
+            # Exclude blank images from metric computation 
+            # -> To match batch sizes, if there are less renderes for a model than in other, we fill in batch with empty images, which we ignore here
             if not torch.all(data["gt_images"][0, r_idx, ...] == 0):
                 psnr, ssim, lpips = metricator.compute_metrics(image, data["gt_images"][0, r_idx, ...])
                 if r_idx < model_cfg.data.input_images:
