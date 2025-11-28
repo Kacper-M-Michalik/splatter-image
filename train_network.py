@@ -19,7 +19,7 @@ import lpips as lpips_lib
 from eval import evaluate_dataset
 from gaussian_renderer import render_predicted
 from scene.gaussian_predictor import GaussianSplatPredictor
-from datasets.dataset_factory import get_dataset
+from splatter_datasets.dataset_factory import get_dataset
 
 @hydra.main(version_base=None, config_path='configs', config_name="default_config")
 def main(cfg: DictConfig):
@@ -70,6 +70,13 @@ def main(cfg: DictConfig):
          'lr': cfg.opt.base_lr})
     optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, 
                                  betas=cfg.opt.betas)
+
+    print("CWD: {}", vis_dir)
+
+    if cfg.data.hf_start_preset is not None:
+        raise "test"
+        # load hf
+        # calculate layers        
 
     # TODO: ADD CODE HERE THAT WILL PERFORM WEIGHT GRAFT AND LORA INSERTION
     if cfg.data.use_pred_depth or cfg.data.use_pred_normal:

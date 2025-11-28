@@ -71,11 +71,11 @@ def readCamerasWithPriorsFromHF(dataset_poses, dataset_rgbs, dataset_depths, dat
     fovx = 51.98948897809546 * 2 * np.pi / 360
 
     for idx in enumerate(len(dataset_poses)):       
-        name = str(dataset_depths[idx]['frame_id']) 
+        name = str(dataset_poses.iloc[idx]['frame_id']) 
         # SRN cameras are camera-to-world transforms
         # no need to change from SRN camera axes (x right, y down, z away) 
         # it's the same as COLMAP (x right, y down, z forward)
-        transform_str = dataset_poses[idx]['pose']
+        transform_str = dataset_poses.iloc[idx]['pose']
         c2w = np.fromstring(transform_str, sep=' ', dtype=np.float32).reshape(4, 4)
 
         # get the world-to-camera transform and set R, T
@@ -83,13 +83,13 @@ def readCamerasWithPriorsFromHF(dataset_poses, dataset_rgbs, dataset_depths, dat
         R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
         T = w2c[:3, 3]
 
-        rgb = dataset_rgbs[idx]['rgb']
+        rgb = dataset_rgbs.iloc[idx]['rgb']
         rgb = np.frombuffer(rgb, dtype=np.uint8).reshape(3, 128, 128).copy()
 
-        depth = dataset_depths[idx]['depth']
+        depth = dataset_depths.iloc[idx]['depth']
         depth = np.frombuffer(depth, dtype=np.uint8).reshape(1, 128, 128).copy()
 
-        normal = dataset_normals[idx]['normal']
+        normal = dataset_normals.iloc[idx]['normal']
         normal = np.frombuffer(normal, dtype=np.uint8).reshape(3, 128, 128).copy()
 
         fovy = focal2fov(fov2focal(fovx, rgb.size[1]), rgb.size[2])

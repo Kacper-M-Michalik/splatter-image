@@ -483,9 +483,9 @@ class GaussianSplatPredictor(nn.Module):
         
         # Calculate number of input channels        
         self.in_channels = 3
-        if cfg.data.use_depth_preds:
+        if cfg.data.use_pred_depth:
             self.in_channels += 1
-        if cfg.data.use_normal_preds:
+        if cfg.data.use_pred_normal:
             self.in_channels += 3
 
         if cfg.model.network_with_offset:
