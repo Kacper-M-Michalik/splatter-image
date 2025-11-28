@@ -32,7 +32,6 @@ opt:
     beta: 0.9999
   lambda_lpips: 0.0
   pretrained_ckpt: null
-  pretrained_channel_mismatch: false
   lora_finetune : false
 
 model:

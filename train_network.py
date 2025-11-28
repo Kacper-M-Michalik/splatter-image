@@ -71,7 +71,17 @@ def main(cfg: DictConfig):
     optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, 
                                  betas=cfg.opt.betas)
 
-    # TODO: ADD CODE HERE THAT WILL PERFORM WEIGHT GRAFT
+    # TODO: ADD CODE HERE THAT WILL PERFORM WEIGHT GRAFT AND LORA INSERTION
+    if cfg.data.use_pred_depth or cfg.data.use_pred_normal:
+        # calc requried layers
+        # load model
+        # check layer count
+        # if mistmatch, perform graft
+        raise "test"
+    
+    if cfg.opt.lora_finetune:
+        # run peft
+        raise "test"
 
     # Resuming training
     if fabric.is_global_zero:

@@ -460,8 +460,6 @@ class SingleImageSongUNetPredictor(nn.Module):
             nn.init.constant_(
                 self.out.bias[start_channels:start_channels+out_channel], b)
             start_channels += out_channel
-        
-        # TODO: Add lightweight training option, adds Lora here and zeros out non rgb channel intial weights
 
     def forward(self, x, film_camera_emb=None, N_views_xa=1):
         x = self.encoder(x, 

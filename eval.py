@@ -87,10 +87,12 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folde
         # Concatenate selected priors
         input_images = data["gt_images"][:, :model_cfg.data.input_images, ...]
         if model_cfg.data.use_depth_preds:
+            assert model_cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
             input_images = torch.cat([input_images,
                             data["pred_depths"][:, :model_cfg.data.input_images, ...]],
                             dim=2)
         if model_cfg.data.use_normal_preds:
+            assert model_cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
             input_images = torch.cat([input_images,
                             data["pred_normals"][:, :model_cfg.data.input_images, ...]],
                             dim=2)
