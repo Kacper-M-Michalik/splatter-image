@@ -54,19 +54,25 @@ class SRNPriorsDataset(SharedDataset):
         )
 
         filter_split = lambda data: data['split'] == self.dataset_name
-        self.dataset_intrins = self.dataset_intrins.filter(filter_split).to_pandas().drop(columns=[]'split'], errors='ignore')
-        self.dataset_poses = self.dataset_poses.filter(filter_split).to_pandas().drop(columns=[]'split'], errors='ignore')
-        self.dataset_rgbs = self.dataset_rgbs.filter(filter_split).to_pandas().drop(columns=[]'split'], errors='ignore')
+        self.dataset_intrins = self.dataset_intrins.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
+        self.dataset_poses = self.dataset_poses.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
+        self.dataset_rgbs = self.dataset_rgbs.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
         self.dataset_depths = self.dataset_depths.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
         self.dataset_normals = self.dataset_normals.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
 
-        self.dataset_intrins.sort_values(by=["uuid"], ascending=[True, True], inplace=True)
+        self.dataset_intrins.sort_values(by=["uuid"], ascending=[True], inplace=True)
         self.dataset_poses.sort_values(by=["uuid", "frame_id"], ascending=[True, True], inplace=True)
         self.dataset_rgbs.sort_values(by=["uuid", "frame_id"], ascending=[True, True], inplace=True)
         self.dataset_depths.sort_values(by=["uuid", "frame_id"], ascending=[True, True], inplace=True)
         self.dataset_normals.sort_values(by=["uuid", "frame_id"], ascending=[True, True], inplace=True)
 
         assert len(self.dataset_poses) == len(self.dataset_rgbs)
+        
+        print(len(self.dataset_intrins))
+        print(len(self.dataset_poses))
+        print(len(self.dataset_rgbs))
+        print(len(self.dataset_depths))
+        print(len(self.dataset_normals))
 
         if cfg.data.subset != -1:
             assert cfg.data.subset > 0
@@ -97,7 +103,10 @@ class SRNPriorsDataset(SharedDataset):
         return self.subset_length
 
     def load_example_id(self, intrin_idx, trans = np.array([0.0, 0.0, 0.0]), scale=1.0):
-        uuid = self.dataset_intrins.iloc[intrin_idx]['uuid']
+        print("load_example_id") 
+        print(intrin_idx) 
+
+        uuid = self.dataset_intrins.iloc[intrin_idx]['uuid']        
         print(uuid)
 
         if not hasattr(self, "all_rgbs"):
@@ -118,7 +127,7 @@ class SRNPriorsDataset(SharedDataset):
             self.all_camera_centers[uuid] = []
             self.all_view_to_world_transforms[uuid] = []
 
-            print(len(self.dataset_poses[self.dataset_poses['uuid']==uuid]))
+            print("len poses: {}".format(len(self.dataset_poses[self.dataset_poses['uuid']==uuid])))
             cam_infos = readCamerasWithPriorsFromHF(uuid, 
                                                     self.dataset_poses[self.dataset_poses['uuid']==uuid],
                                                     self.dataset_rgbs[self.dataset_rgbs['uuid']==uuid], 
@@ -131,21 +140,21 @@ class SRNPriorsDataset(SharedDataset):
 
                 assert cam_info.rgb_image.shape[1] == self.cfg.data.training_resolution
                 assert cam_info.rgb_image.shape[2] == self.cfg.data.training_resolution
-                image = (cam_info.rgb_image / 255.0).clamp(0.0, 1.0)
+                image = (torch.from_numpy(cam_info.rgb_image) / 255.0).clamp(0.0, 1.0)
                 print(image.shape)
                 print(image)
                 self.all_rgbs[uuid].append(image)
                 
                 assert cam_info.depth_image.shape[1] == self.cfg.data.training_resolution
                 assert cam_info.depth_image.shape[2] == self.cfg.data.training_resolution
-                image = (cam_info.depth_image / 255.0).clamp(0.0, 1.0)
+                image = (torch.from_numpy(cam_info.depth_image) / 255.0).clamp(0.0, 1.0)
                 print(image.shape)
                 print(image)
                 self.all_depths[uuid].append(image)
                 
                 assert cam_info.normal_image.shape[1] == self.cfg.data.training_resolution
                 assert cam_info.normal_image.shape[2] == self.cfg.data.training_resolution
-                image = (cam_info.normal_image / 255.0).clamp(0.0, 1.0)
+                image = (torch.from_numpy(cam_info.normal_image) / 255.0).clamp(0.0, 1.0)
                 print(image.shape)
                 print(image)
                 self.all_normals[uuid].append(image) 

@@ -8,12 +8,14 @@ import torch
 from torch.utils.data import DataLoader
 
 from lightning.fabric import Fabric
+from huggingface_hub import hf_hub_download
 
 from ema_pytorch import EMA
 from omegaconf import DictConfig, OmegaConf
 
 from utils.general_utils import safe_state
 from utils.loss_utils import l1_loss, l2_loss
+from utils.prior_utils import calc_channels
 import lpips as lpips_lib
 
 from eval import evaluate_dataset
@@ -71,26 +73,10 @@ def main(cfg: DictConfig):
     optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, 
                                  betas=cfg.opt.betas)
 
-    print("CWD: {}", vis_dir)
-
-    if cfg.data.hf_start_preset is not None:
-        raise "test"
-        # load hf
-        # calculate layers        
-
-    # TODO: ADD CODE HERE THAT WILL PERFORM WEIGHT GRAFT AND LORA INSERTION
-    if cfg.data.use_pred_depth or cfg.data.use_pred_normal:
-        # calc requried layers
-        # load model
-        # check layer count
-        # if mistmatch, perform graft
-        raise "test"
-    
-    if cfg.opt.lora_finetune:
-        # run peft
-        raise "test"
-
+    print("CWD: {}".format(vis_dir))
+  
     # Resuming training
+    assert (cfg.opt.pretrained_ckpt is None or not cfg.opt.pretrained_hf), "Cannot set both pretrained_ckpt and pretrained_hf!"
     if fabric.is_global_zero:
         if os.path.isfile(os.path.join(vis_dir, "model_latest.pth")):
             print('Loading an existing model from ', os.path.join(vis_dir, "model_latest.pth"))
@@ -105,6 +91,7 @@ def main(cfg: DictConfig):
             first_iter = checkpoint["iteration"]
             best_PSNR = checkpoint["best_PSNR"] 
             print('Loaded model')
+
         # Resuming from checkpoint
         elif cfg.opt.pretrained_ckpt is not None:
             pretrained_ckpt_dir = os.path.join(cfg.opt.pretrained_ckpt, "model_latest.pth")
@@ -117,9 +104,55 @@ def main(cfg: DictConfig):
                                                 strict=False)
             best_PSNR = checkpoint["best_PSNR"] 
             print('Loaded model from a pretrained checkpoint')
+
+        # Resume from HuggingFace pretrained weights, perform weight graft if now training with additional priors
+        elif cfg.opt.pretrained_hf:
+            category = cfg.data.category
+            if category == "cars_priors":
+                category == "cars"
+
+            model_name = category
+            if cfg.data.category in ["gso", "objaverse"]:
+                model_name = "latest"
+
+            cfg_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", filename="config_{}.yaml".format(category))
+            old_cfg = OmegaConf.load(cfg_path)
+            model_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", filename="model_{}.pth".format(model_name))
+                                 
+            old_channels = calc_channels(cfg)
+            new_channels = calc_channels(cfg)
+
+            if old_channels == new_channels:
+                raise "old"
+            else:
+                old_model = GaussianSplatPredictor(old_cfg)
+                new_model = GaussianSplatPredictor(cfg)
+                print(old_model)
+                print(new_model)
+
+                print("-----OLD LOOP-----")
+                for name, param in old_model.state_dict().items():
+                    print(name)
+                    print(param)
+                    print("!----!")
+                
+                print("-----NEW LOOP-----")
+                for name, param in old_model.state_dict().items():
+                    print(name)
+                    print(param)
+                    print("!----!")
+
+                raise "test"
+
+                # if mistmatch, perform graft  
+                  
         else:
             best_PSNR = 0.0
 
+    if cfg.opt.lora_finetune:
+        # run peft
+        raise "test"
+    
     # Set up Exponential Moving Average for training
     if cfg.opt.ema.use and fabric.is_global_zero:
         ema = EMA(gaussian_predictor, 

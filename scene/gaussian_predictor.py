@@ -10,6 +10,7 @@ from einops import rearrange, repeat
 
 from utils.general_utils import matrix_to_quaternion, quaternion_raw_multiply
 from utils.graphics_utils import fov2focal
+from utils.prior_utils import calc_channels
 
 # U-Net implementation from EDM
 # Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -482,11 +483,7 @@ class GaussianSplatPredictor(nn.Module):
             "Need at least one network"
         
         # Calculate number of input channels        
-        self.in_channels = 3
-        if cfg.data.use_pred_depth:
-            self.in_channels += 1
-        if cfg.data.use_pred_normal:
-            self.in_channels += 3
+        self.in_channels = calc_channels(cfg)
 
         if cfg.model.network_with_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(True, cfg)
