@@ -65,12 +65,12 @@ def readCamerasFromTxt(rgb_paths, pose_paths, idxs):
         
     return cam_infos
 
-def readCamerasWithPriorsFromHF(dataset_poses, dataset_rgbs, dataset_depths, dataset_normals):
+def readCamerasWithPriorsFromHF(dataset_poses, dataset_rgbs, dataset_depths, dataset_normals):    
     cam_infos = []
     # Transform fov from degrees to radians
     fovx = 51.98948897809546 * 2 * np.pi / 360
 
-    for idx in enumerate(len(dataset_poses)):       
+    for idx in range(len(dataset_poses)):       
         name = str(dataset_poses.iloc[idx]['frame_id']) 
         # SRN cameras are camera-to-world transforms
         # no need to change from SRN camera axes (x right, y down, z away) 
@@ -92,13 +92,13 @@ def readCamerasWithPriorsFromHF(dataset_poses, dataset_rgbs, dataset_depths, dat
         normal = dataset_normals.iloc[idx]['normal']
         normal = np.frombuffer(normal, dtype=np.uint8).reshape(3, 128, 128).copy()
 
-        fovy = focal2fov(fov2focal(fovx, rgb.size[1]), rgb.size[2])
+        fovy = focal2fov(fov2focal(fovx, rgb.shape[1]), rgb.shape[2])
         FovY = fovy 
         FovX = fovx
 
         cam_infos.append(CameraInfoWithPriors(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, 
                                             rgb_image=rgb, depth_image=depth, normal_image=normal,
-                                            image_path=None, image_name=name, width=rgb.size[1], height=rgb.size[2]))
+                                            image_path=None, image_name=name, width=rgb.shape[1], height=rgb.shape[2]))
         
     return cam_infos
 

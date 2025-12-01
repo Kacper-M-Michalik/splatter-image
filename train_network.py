@@ -217,12 +217,12 @@ def main(cfg: DictConfig):
 
             # Concatenate selected priors
             input_images = data["gt_images"][:, :cfg.data.input_images, ...]
-            if cfg.data.use_depth_preds:
+            if cfg.data.use_pred_depth:
                 assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
                 input_images = torch.cat([input_images,
                                 data["pred_depths"][:, :cfg.data.input_images, ...]],
                                 dim=2)
-            if cfg.data.use_normal_preds:
+            if cfg.data.use_pred_normal:
                 assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
                 input_images = torch.cat([input_images,
                                 data["pred_normals"][:, :cfg.data.input_images, ...]],
