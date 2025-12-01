@@ -15,7 +15,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from utils.general_utils import safe_state
 from utils.loss_utils import l1_loss, l2_loss
-from utils.prior_utils import calc_channels
+import utils.prior_utils import calc_channels, graft_weights_with_channel_expansion, is_base_model
 import lpips as lpips_lib
 
 from eval import evaluate_dataset
@@ -109,43 +109,41 @@ def main(cfg: DictConfig):
         elif cfg.opt.pretrained_hf:
             category = cfg.data.category
             if category == "cars_priors":
-                category == "cars"
+                category = "cars"
 
             model_name = category
             if cfg.data.category in ["gso", "objaverse"]:
                 model_name = "latest"
 
-            cfg_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", filename="config_{}.yaml".format(category))
-            old_cfg = OmegaConf.load(cfg_path)
+            cfg_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", filename="config_{}.yaml".format(category))            
             model_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", filename="model_{}.pth".format(model_name))
-                                 
-            old_channels = calc_channels(cfg)
-            new_channels = calc_channels(cfg)
+            old_cfg = OmegaConf.load(cfg_path)   
+            assert is_base_model(old_cfg)
+            
+            checkpoint = torch.load(model_path, map_location=device) 
+            print(checkpoint)
 
-            if old_channels == new_channels:
+            if "model_state_dict" in checkpoint:
+                print("model state dict found")
+            elif "state_dict" in checkpoint:
+                print("base state dict found")
+
+            raise "test"
+
+            # Check if new model uses priors
+            if is_base_model(cfg):      
+                try:
+                    gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
+                except RuntimeError:
+                    gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
                 raise "old"
-            else:
-                old_model = GaussianSplatPredictor(old_cfg)
-                new_model = GaussianSplatPredictor(cfg)
-                print(old_model)
-                print(new_model)
-
-                print("-----OLD LOOP-----")
-                for name, param in old_model.state_dict().items():
-                    print(name)
-                    print(param)
-                    print("!----!")
-                
-                print("-----NEW LOOP-----")
-                for name, param in old_model.state_dict().items():
-                    print(name)
-                    print(param)
-                    print("!----!")
-
-                raise "test"
-
-                # if mistmatch, perform graft  
-                  
+            else:                       
+                gaussian_predictor = graft_weights_with_channel_expansion(checkpoint["model_state_dict"], gaussian_predictor, old_cfg, cfg)
+                print("Grafting performed successfully")
+                   
+            best_PSNR = checkpoint["best_PSNR"] 
+            print('Loaded model from a pretrained Huggingface checkpoint')   
+                        
         else:
             best_PSNR = 0.0
 
