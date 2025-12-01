@@ -32,6 +32,7 @@ opt:
     beta: 0.9999
   lambda_lpips: 0.0
   pretrained_ckpt: null
+  pretrained_hf: False
   lora_finetune : false
 
 model:
