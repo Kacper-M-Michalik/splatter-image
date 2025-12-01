@@ -15,7 +15,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from utils.general_utils import safe_state
 from utils.loss_utils import l1_loss, l2_loss
-import utils.prior_utils import calc_channels, graft_weights_with_channel_expansion, is_base_model
+from utils.prior_utils import calc_channels, graft_weights_with_channel_expansion, is_base_model
 import lpips as lpips_lib
 
 from eval import evaluate_dataset
@@ -80,8 +80,7 @@ def main(cfg: DictConfig):
     if fabric.is_global_zero:
         if os.path.isfile(os.path.join(vis_dir, "model_latest.pth")):
             print('Loading an existing model from ', os.path.join(vis_dir, "model_latest.pth"))
-            checkpoint = torch.load(os.path.join(vis_dir, "model_latest.pth"),
-                                    map_location=device) 
+            checkpoint = torch.load(os.path.join(vis_dir, "model_latest.pth"), map_location=device, weights_only=False) 
             try:
                 gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
             except RuntimeError:
@@ -95,8 +94,7 @@ def main(cfg: DictConfig):
         # Resuming from checkpoint
         elif cfg.opt.pretrained_ckpt is not None:
             pretrained_ckpt_dir = os.path.join(cfg.opt.pretrained_ckpt, "model_latest.pth")
-            checkpoint = torch.load(pretrained_ckpt_dir,
-                                    map_location=device) 
+            checkpoint = torch.load(pretrained_ckpt_dir, map_location=device, weights_only=False) 
             try:
                 gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
             except RuntimeError:
@@ -120,15 +118,7 @@ def main(cfg: DictConfig):
             old_cfg = OmegaConf.load(cfg_path)   
             assert is_base_model(old_cfg)
             
-            checkpoint = torch.load(model_path, map_location=device) 
-            print(checkpoint)
-
-            if "model_state_dict" in checkpoint:
-                print("model state dict found")
-            elif "state_dict" in checkpoint:
-                print("base state dict found")
-
-            raise "test"
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
             # Check if new model uses priors
             if is_base_model(cfg):      

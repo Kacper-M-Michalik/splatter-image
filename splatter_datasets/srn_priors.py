@@ -110,6 +110,7 @@ class SRNPriorsDataset(SharedDataset):
         print(uuid)
 
         if not hasattr(self, "all_rgbs"):
+            self.all_poses = {}
             self.all_rgbs = {}
             self.all_depths = {}
             self.all_normals = {}
@@ -119,6 +120,7 @@ class SRNPriorsDataset(SharedDataset):
             self.all_camera_centers = {}
 
         if uuid not in self.all_rgbs.keys():
+            self.all_poses[uuid] = []
             self.all_rgbs[uuid] = []
             self.all_depths[uuid] = []
             self.all_normals[uuid] = []
@@ -128,6 +130,9 @@ class SRNPriorsDataset(SharedDataset):
             self.all_view_to_world_transforms[uuid] = []
 
             print("len poses: {}".format(len(self.dataset_poses[self.dataset_poses['uuid']==uuid])))
+            print("len rgbs: {}".format(len(self.dataset_rgbs[self.dataset_rgbs['uuid']==uuid])))
+            print("len depths: {}".format(len(self.dataset_depths[self.dataset_depths['uuid']==uuid])))
+            print("len normals: {}".format(len(self.dataset_normals[self.dataset_normals['uuid']==uuid])))
             cam_infos = readCamerasWithPriorsFromHF(uuid, 
                                                     self.dataset_poses[self.dataset_poses['uuid']==uuid],
                                                     self.dataset_rgbs[self.dataset_rgbs['uuid']==uuid], 
@@ -176,6 +181,7 @@ class SRNPriorsDataset(SharedDataset):
             self.all_view_to_world_transforms[uuid] = torch.stack(self.all_view_to_world_transforms[uuid])
             self.all_full_proj_transforms[uuid] = torch.stack(self.all_full_proj_transforms[uuid])
             self.all_camera_centers[uuid] = torch.stack(self.all_camera_centers[uuid])
+            self.all_poses[uuid] = torch.stack(self.all_poses[uuid])
             self.all_rgbs[uuid] = torch.stack(self.all_rgbs[uuid])
             self.all_depths[uuid] = torch.stack(self.all_depths[uuid])
             self.all_normals[uuid] = torch.stack(self.all_normals[uuid])

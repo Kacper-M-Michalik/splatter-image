@@ -23,14 +23,32 @@ def calc_channels(cfg):
 def graft_weights_with_channel_expansion(old_state_dict, new_model, old_cfg, new_cfg):
     new_state_dict = new_model.state_dict()
 
-    for name, param in new_state_dict.items():
+    # Iterate over all layers
+    for name, new_param in new_state_dict.items():
         if name not in old_state_dict:
             print("Failed to find layer {} in HuggingFace model state_dict".format(name))
             raise "Mismatched source model for graft"
 
-    print("\n DIRECT ACCESS\n")
-    print(old_state_dict["network_with_offset.encoder.enc.128x128_conv.weight"].shape)
-    print("\n NEW")
-    print(new_state_dict["network_with_offset.encoder.enc.128x128_conv.weight"].shape)
+        old_param = old_state_dict[name]
 
+        # Directly copy tensors if matching in size (handles most layers)
+        if (new_param.shape == old_param.shape):
+            new_state_dict[name] = old_param.clone()
+            continue
+
+        # In theory we should only reach here for Conv2D layers, as such only need to handle weights, and these should be 4 dimensional with channels in shape[1]
+        if ('weight' in name):
+            assert new_param.shape[0] == old_param.shape[0], "Grafting only supported for adding channels, not changing resolution"
+            assert new_param.shape[1] > old_param.shape[1], "Cannot truncate channels during graft, can only add channels"
+
+            new_weights = new_param.clone()
+            new_weights[:, :old_param.shape[1], :, :] = old_param
+            new_weights[:, old_param.shape[1]:, :, :] = 0.0
+
+            new_state_dict[name] = new_weights
+        else:
+            print("Failed to graft layer: {}, Old: {}, New: {}".format(name, old_param.shape, new_param.shape))
+            raise "Failed layer graft"
+            
+    new_model.load_state_dict(new_state_dict)
     return new_model
