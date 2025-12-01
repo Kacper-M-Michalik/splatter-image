@@ -102,7 +102,10 @@ class SRNPriorsDataset(SharedDataset):
 
     def __len__(self):
         return self.subset_length
-
+    
+    def get_example_id(self, index):
+        return self.dataset_intrins.iloc[index]['uuid']
+    
     def load_example_id(self, intrin_idx, trans = np.array([0.0, 0.0, 0.0]), scale=1.0):
         uuid = self.dataset_intrins.iloc[intrin_idx]['uuid']   
 
