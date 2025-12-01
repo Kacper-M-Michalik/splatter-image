@@ -19,46 +19,42 @@ class SRNPriorsDataset(SharedDataset):
 
         self.dataset_name = dataset_name
         if dataset_name == "vis":
-            self.dataset_name = "test"
-        
+            self.dataset_name = "test"            
+        #if dataset_name == "val":
+        #    self.dataset_name = "validation"
+
         # Download ready dataset from HuggingFace
         self.dataset_intrins = load_dataset(
             "MVP-Group-Project/srn_cars_priors",
-            name="srn_cars_intrins",
-            data_dir="srn_cars_intrins", 
-            split="train"
+            name="srn_cars_intrins", 
+            split=self.dataset_name
         )
         self.dataset_poses = load_dataset(
             "MVP-Group-Project/srn_cars_priors",
-            name="srn_cars_poses",
-            data_dir="srn_cars_poses", 
-            split="train"
+            name="srn_cars_poses", 
+            split=self.dataset_name
         )
         self.dataset_rgbs = load_dataset(
             "MVP-Group-Project/srn_cars_priors",
-            name="srn_cars_rgbs",
-            data_dir="srn_cars_rgbs", 
-            split="train"
+            name="srn_cars_rgbs", 
+            split=self.dataset_name
         )
         self.dataset_depths = load_dataset(
             "MVP-Group-Project/srn_cars_priors",
-            name="srn_cars_depths",
-            data_dir="srn_cars_depths", 
-            split="train"
+            name="srn_cars_depths", 
+            split=self.dataset_name
         )
         self.dataset_normals = load_dataset(
             "MVP-Group-Project/srn_cars_priors",
-            name="srn_cars_normals",
-            data_dir="srn_cars_normals", 
-            split="train"
+            name="srn_cars_normals", 
+            split=self.dataset_name
         )
 
-        filter_split = lambda data: data['split'] == self.dataset_name
-        self.dataset_intrins = self.dataset_intrins.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
-        self.dataset_poses = self.dataset_poses.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
-        self.dataset_rgbs = self.dataset_rgbs.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
-        self.dataset_depths = self.dataset_depths.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
-        self.dataset_normals = self.dataset_normals.filter(filter_split).to_pandas().drop(columns=['split'], errors='ignore')
+        self.dataset_intrins = self.dataset_intrins.to_pandas()
+        self.dataset_poses = self.dataset_poses.to_pandas()
+        self.dataset_rgbs = self.dataset_rgbs.to_pandas()
+        self.dataset_depths = self.dataset_depths.to_pandas()
+        self.dataset_normals = self.dataset_normals.to_pandas()
 
         self.dataset_intrins.sort_values(by=["uuid"], ascending=[True], inplace=True)
         self.dataset_poses.sort_values(by=["uuid", "frame_id"], ascending=[True, True], inplace=True)
@@ -68,12 +64,6 @@ class SRNPriorsDataset(SharedDataset):
 
         assert len(self.dataset_poses) == len(self.dataset_rgbs)
         
-        print(len(self.dataset_intrins))
-        print(len(self.dataset_poses))
-        print(len(self.dataset_rgbs))
-        print(len(self.dataset_depths))
-        print(len(self.dataset_normals))
-
         if cfg.data.subset != -1:
             assert cfg.data.subset > 0
             assert len(self.dataset_intrins) >= cfg.data.subset
@@ -81,7 +71,8 @@ class SRNPriorsDataset(SharedDataset):
         else:
             self.subset_length = len(self.dataset_intrins)
         
-        print("Dataset length: {}".format(self.subset_length))
+        print("Dataset intrin length: {}".format(self.subset_length))
+        print("Dataset image length: {}".format(self.dataset_poses))
 
         self.projection_matrix = getProjectionMatrix(
             znear=self.cfg.data.znear, zfar=self.cfg.data.zfar,
@@ -103,9 +94,6 @@ class SRNPriorsDataset(SharedDataset):
         return self.subset_length
 
     def load_example_id(self, intrin_idx, trans = np.array([0.0, 0.0, 0.0]), scale=1.0):
-        print("load_example_id") 
-        print(intrin_idx) 
-
         uuid = self.dataset_intrins.iloc[intrin_idx]['uuid']        
         print(uuid)
 
