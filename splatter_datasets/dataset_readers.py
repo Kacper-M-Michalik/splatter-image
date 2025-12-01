@@ -6,6 +6,7 @@ from PIL import Image
 from typing import NamedTuple
 from utils.graphics_utils import focal2fov, fov2focal
 import numpy as np
+import torch
 from pathlib import Path
 
 class CameraInfo(NamedTuple):
@@ -26,9 +27,9 @@ class CameraInfoWithPriors(NamedTuple):
     T: np.array
     FovY: np.array
     FovX: np.array
-    rgb_image: np.array
-    depth_image: np.array
-    normal_image: np.array
+    rgb_image: torch.Tensor
+    depth_image: torch.Tensor
+    normal_image: torch.Tensor
     image_path: str
     image_name: str
     width: int
@@ -71,7 +72,7 @@ def readCamerasWithPriorsFromHF(dataset_poses, dataset_rgbs, dataset_depths, dat
     fovx = 51.98948897809546 * 2 * np.pi / 360
 
     for idx in range(len(dataset_poses)):       
-        name = str(dataset_poses.iloc[idx]['frame_id']) 
+        name = str(idx)
         # SRN cameras are camera-to-world transforms
         # no need to change from SRN camera axes (x right, y down, z away) 
         # it's the same as COLMAP (x right, y down, z forward)
@@ -83,22 +84,20 @@ def readCamerasWithPriorsFromHF(dataset_poses, dataset_rgbs, dataset_depths, dat
         R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
         T = w2c[:3, 3]
 
-        rgb = dataset_rgbs.iloc[idx]['rgb']
-        rgb = np.frombuffer(rgb, dtype=np.uint8).reshape(3, 128, 128).copy()
+        rgb = torch.frombuffer(dataset_rgbs.iloc[idx]['rgb'], dtype=torch.uint8).clone()
+        depth = torch.frombuffer(dataset_depths.iloc[idx]['depth'], dtype=torch.uint8).clone()
+        normal = torch.frombuffer(dataset_normals.iloc[idx]['normal'], dtype=torch.uint8).clone()
 
-        depth = dataset_depths.iloc[idx]['depth']
-        depth = np.frombuffer(depth, dtype=np.uint8).reshape(1, 128, 128).copy()
+        width = 128
+        height = 128
 
-        normal = dataset_normals.iloc[idx]['normal']
-        normal = np.frombuffer(normal, dtype=np.uint8).reshape(3, 128, 128).copy()
-
-        fovy = focal2fov(fov2focal(fovx, rgb.shape[1]), rgb.shape[2])
+        fovy = focal2fov(fov2focal(fovx, width), height)
         FovY = fovy 
         FovX = fovx
 
         cam_infos.append(CameraInfoWithPriors(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, 
                                             rgb_image=rgb, depth_image=depth, normal_image=normal,
-                                            image_path=None, image_name=name, width=rgb.shape[1], height=rgb.shape[2]))
+                                            image_path=None, image_name=name, width=width, height=height))
         
     return cam_infos
 

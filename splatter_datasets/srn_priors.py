@@ -13,6 +13,14 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getView2Wo
 
 from .shared_dataset import SharedDataset
 
+def process_and_chunk(hf_dataset, uuids):
+    df = hf_dataset.to_pandas()    
+    df = df[df['uuid'].isin(uuids)]    
+    grouped = {uuid: group.sort_values(by=['frame_id']) for uuid, group in df.groupby('uuid')}
+
+    del df
+    return grouped
+
 class SRNPriorsDataset(SharedDataset):
     def __init__(self, cfg, dataset_name="train"):
         super().__init__()
@@ -52,14 +60,9 @@ class SRNPriorsDataset(SharedDataset):
         print("Downloaded datasets")
 
         pre_dataset_intrins = dataset_intrins.to_pandas()
-        pre_dataset_poses = dataset_poses.to_pandas()
-        pre_dataset_rgbs = dataset_rgbs.to_pandas()
-        pre_dataset_depths = dataset_depths.to_pandas()
-        pre_dataset_normals = dataset_normals.to_pandas()        
-
         pre_dataset_intrins.sort_values(by=["uuid"], ascending=[True], inplace=True)
+
         assert len(dataset_poses) == len(dataset_rgbs)
-        
         if cfg.data.subset != -1:
             assert cfg.data.subset > 0
             assert len(pre_dataset_intrins) >= cfg.data.subset
@@ -67,18 +70,17 @@ class SRNPriorsDataset(SharedDataset):
         else:
             self.subset_length = len(pre_dataset_intrins)
 
-        self.dataset_intrins = pre_dataset_intrins
-        self.dataset_poses = {}
-        self.dataset_rgbs = {}
-        self.dataset_depths = {}
-        self.dataset_normals = {}
-        for i in range(self.subset_length):
-            uuid = self.dataset_intrins.iloc[i]['uuid']
-            self.dataset_poses[uuid] = pre_dataset_poses[pre_dataset_poses['uuid']==uuid].sort_values(by=['frame_id'])
-            self.dataset_rgbs[uuid] = pre_dataset_rgbs[pre_dataset_rgbs['uuid']==uuid].sort_values(by=['frame_id'])
-            self.dataset_depths[uuid] = pre_dataset_depths[pre_dataset_depths['uuid']==uuid].sort_values(by=['frame_id'])
-            self.dataset_normals[uuid] = pre_dataset_normals[pre_dataset_normals['uuid']==uuid].sort_values(by=['frame_id'])
-        print("Converted datasets")
+        self.dataset_intrins = pre_dataset_intrins.iloc[:self.subset_length]
+        uuids = set(self.dataset_intrins['uuid'].unique())    
+
+        self.dataset_poses = process_and_chunk(dataset_poses, uuids)
+        print("Converted poses")
+        self.dataset_rgbs = process_and_chunk(dataset_rgbs, uuids)
+        print("Converted rgbs")
+        self.dataset_depths = process_and_chunk(dataset_depths, uuids)
+        print("Converted depths")
+        self.dataset_normals = process_and_chunk(dataset_normals, uuids)    
+        print("Converted normals")
 
         print("Dataset intrin length: {}".format(self.subset_length))
 
@@ -114,7 +116,7 @@ class SRNPriorsDataset(SharedDataset):
             self.all_full_proj_transforms = {}
             self.all_camera_centers = {}
 
-        if uuid not in self.all_rgbs.keys():
+        if uuid not in self.all_rgbs.keys():            
             self.all_rgbs[uuid] = []
             self.all_depths[uuid] = []
             self.all_normals[uuid] = []
@@ -137,21 +139,19 @@ class SRNPriorsDataset(SharedDataset):
                 R = cam_info.R
                 T = cam_info.T
 
-                assert cam_info.rgb_image.shape[1] == self.cfg.data.training_resolution
-                assert cam_info.rgb_image.shape[2] == self.cfg.data.training_resolution
-                image = (torch.from_numpy(cam_info.rgb_image) / 255.0).clamp(0.0, 1.0)
+                assert cam_info.width == self.cfg.data.training_resolution
+                assert cam_info.height == self.cfg.data.training_resolution
+
+                # We store everything as the uint8's due to memory usage problems, we recompute the floats on the go in __getitem__
+                image = cam_info.rgb_image.view(3, cam_info.height, cam_info.width)
                 self.all_rgbs[uuid].append(image)
                 
-                assert cam_info.depth_image.shape[1] == self.cfg.data.training_resolution
-                assert cam_info.depth_image.shape[2] == self.cfg.data.training_resolution
-                image = (torch.from_numpy(cam_info.depth_image) / 255.0).clamp(0.0, 1.0)
+                image = cam_info.depth_image.view(1, cam_info.height, cam_info.width)
                 self.all_depths[uuid].append(image)
                 
-                assert cam_info.normal_image.shape[1] == self.cfg.data.training_resolution
-                assert cam_info.normal_image.shape[2] == self.cfg.data.training_resolution
-                image = (torch.from_numpy(cam_info.normal_image) / 255.0).clamp(0.0, 1.0)
+                image = cam_info.normal_image.view(3, cam_info.height, cam_info.width)
                 self.all_normals[uuid].append(image) 
-
+ 
                 world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1)
                 view_world_transform = torch.tensor(getView2World(R, T, trans, scale)).transpose(0, 1)
 
@@ -190,9 +190,9 @@ class SRNPriorsDataset(SharedDataset):
                                     torch.tensor([i for i in range(251) if i not in input_idxs])], dim=0) 
 
         images_and_camera_poses = {
-            "gt_images": self.all_rgbs[uuid][frame_idxs].clone(),
-            "pred_depths": self.all_depths[uuid][frame_idxs].clone(),
-            "pred_normals": self.all_normals[uuid][frame_idxs].clone(),
+            "gt_images": (self.all_rgbs[uuid][frame_idxs].float() / 255.0).clamp(0.0, 1.0),
+            "pred_depths": (self.all_depths[uuid][frame_idxs].float() / 255.0).clamp(0.0, 1.0),
+            "pred_normals": (self.all_normals[uuid][frame_idxs].float() / 255.0).clamp(0.0, 1.0),
             "world_view_transforms": self.all_world_view_transforms[uuid][frame_idxs],
             "view_to_world_transforms": self.all_view_to_world_transforms[uuid][frame_idxs],
             "full_proj_transforms": self.all_full_proj_transforms[uuid][frame_idxs],
