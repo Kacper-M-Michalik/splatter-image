@@ -36,7 +36,7 @@ def graft_weights_with_channel_expansion(old_state_dict, new_model, old_cfg, new
             new_state_dict[name] = old_param.clone()
             continue
 
-        # In theory we should only reach here for Conv2D layers, as such only need to handle weights, and these should be 4 dimensional with channels in shape[1]
+        # In theory we should only reach here for Conv2D layers, as such only need to handle weights, and these should only have extra channels in shape[1]
         if ('weight' in name):
             assert new_param.shape[0] == old_param.shape[0], "Grafting only supported for adding channels, not changing resolution"
             assert new_param.shape[1] > old_param.shape[1], "Cannot truncate channels during graft, can only add channels"
