@@ -29,19 +29,19 @@ class Metricator():
         return psnr, ssim, lpips
 
 @torch.no_grad()
-def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, out_folder=None):
+def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, score_path=None, out_folder=None):
     """
     Runs evaluation on the dataset passed in the dataloader. 
     Computes, prints and saves PSNR, SSIM, LPIPS.
     Args:
         save_vis: how many examples will have visualisations saved
+        sccore_path: where to store scores
     """
 
     # Make folder for output images
     if save_vis > 0:
         os.makedirs(out_folder, exist_ok=True)
 
-    score_path = args.score_path
     if score_path is None:
        score_path = "scores.txt" 
 
@@ -309,7 +309,7 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False,
                             persistent_workers=True, pin_memory=True, num_workers=1)
     
-    scores = evaluate_dataset(model, dataloader, device, training_cfg, save_vis=save_vis, out_folder=out_folder)
+    scores = evaluate_dataset(model, dataloader, device, training_cfg, save_vis=save_vis, score_path=args.score_path, out_folder=out_folder)
     if split != 'vis':
         print(scores)
     return scores
