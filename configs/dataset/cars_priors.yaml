@@ -6,6 +6,9 @@ data:
   category: cars_priors
   white_background: true
   origin_distances: false
+  use_pred_depth: true
+  use_pred_normal: true
+  input_images: 1
 
 model:
   opacity_scale: 0.001
