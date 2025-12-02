@@ -359,15 +359,27 @@ def main(cfg: DictConfig):
 
                     rot_transform_quats = vis_data["source_cv2wT_quat"][:, :cfg.data.input_images]
 
+                    input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
+                    if cfg.data.use_pred_depth:
+                        assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
+                        input_images = torch.cat([input_images,
+                                        vis_data["pred_depths"][:, :cfg.data.input_images, ...]],
+                                        dim=2)
+                    if cfg.data.use_pred_normal:
+                        assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
+                        input_images = torch.cat([input_images,
+                                        vis_data["pred_normals"][:, :cfg.data.input_images, ...]],
+                                        dim=2)
+
+                    # Get focal info and depth for CO3D data
                     if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                         focals_pixels_pred = vis_data["focals_pixels"][:, :cfg.data.input_images, ...]
-                        input_images = torch.cat([vis_data["gt_images"][:, :cfg.data.input_images, ...],
-                                                vis_data["origin_distances"][:, :cfg.data.input_images, ...]],
-                                                dim=2)
+                        input_images = torch.cat([input_images,
+                                        vis_data["origin_distances"][:, :cfg.data.input_images, ...]],
+                                        dim=2)
                     else:
                         focals_pixels_pred = None
-                        input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
-
+                                          
                     gaussian_splats_vis = gaussian_predictor(input_images,
                                                         vis_data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                         rot_transform_quats,
