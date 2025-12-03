@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision 
 
 import numpy as np
@@ -11,6 +12,31 @@ from einops import rearrange, repeat
 from utils.general_utils import matrix_to_quaternion, quaternion_raw_multiply
 from utils.graphics_utils import fov2focal
 from utils.prior_utils import calc_channels
+
+import math
+
+
+# LoRA Class (From Microsoft loralib)
+# Should mix in with linear and conv2d layers
+class LoRALayer():
+    def __init__(
+        self, 
+        r: int, 
+        lora_alpha: int, 
+        lora_dropout: float,
+        merge_weights: bool,
+    ):
+        self.r = r
+        self.lora_alpha = lora_alpha
+        # Optional dropout (applied to input of LoRA branch)
+        if lora_dropout > 0.:
+            self.lora_dropout = nn.Dropout(p=lora_dropout)
+        else:
+            self.lora_dropout = lambda x: x
+        # Mark the weight as unmerged - separate from base weights
+        self.merged = False
+        self.merge_weights = merge_weights
+
 
 # U-Net implementation from EDM
 # Copyright (c) 2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -35,32 +61,75 @@ def weight_init(shape, mode, fan_in, fan_out):
 
 #----------------------------------------------------------------------------
 # Fully-connected layer.
-
-class Linear(torch.nn.Module):
-    def __init__(self, in_features, out_features, bias=True, init_mode='kaiming_normal', init_weight=1, init_bias=0):
-        super().__init__()
+# Modified to inherit from LoRALayer for LoRA functionality.
+class Linear(torch.nn.Module, LoRALayer):
+    def __init__(self, in_features, out_features, bias=True, init_mode='kaiming_normal', init_weight=1, init_bias=0,
+                 lora_rank=0, lora_alpha=1, lora_dropout=0.0, merge_weights=True):
+        torch.nn.Module.__init__(self)
+        LoRALayer.__init__(self, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
+        
         self.in_features = in_features
         self.out_features = out_features
         init_kwargs = dict(mode=init_mode, fan_in=in_features, fan_out=out_features)
         self.weight = torch.nn.Parameter(weight_init([out_features, in_features], **init_kwargs) * init_weight)
         self.bias = torch.nn.Parameter(weight_init([out_features], **init_kwargs) * init_bias) if bias else None
 
+        # Initialise trainable parameters
+        if lora_rank > 0:
+            # Create A and B matrices, input dim to rank, and rank to output dim
+            self.lora_A = nn.Parameter(self.weight.new_zeros((lora_rank, in_features)))
+            self.lora_B = nn.Parameter(self.weight.new_zeros((out_features, lora_rank)))
+            self.scaling = self.lora_alpha / self.r
+            # Freeze the pre-trained weight matrix
+            self.weight.requires_grad = False
+            
+            # Reset LoRA params (Microsoft init)
+            nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+            nn.init.zeros_(self.lora_B)
+
+    def train(self, mode: bool = True):
+        torch.nn.Module.train(self, mode)
+        if mode:
+            if self.merge_weights and self.merged:
+                # Unmerge weights for training. A and B are independent.
+                if self.r > 0:
+                    self.weight.data -= (self.lora_B @ self.lora_A) * self.scaling
+                self.merged = False
+        else:
+            if self.merge_weights and not self.merged:
+                if self.r > 0:
+                    self.weight.data += (self.lora_B @ self.lora_A) * self.scaling
+                self.merged = True
+
     def forward(self, x):
-        x = x @ self.weight.to(x.dtype).t()
+        # Implementation of Microsoft Linear forward logic
+        if self.r > 0 and not self.merged:
+            result = x @ self.weight.to(x.dtype).t()
+            
+            # LoRA branch calculation: dropout(x) @ A.T @ B.T * scaling
+            lora_term = (self.lora_dropout(x) @ self.lora_A.transpose(0, 1) @ self.lora_B.transpose(0, 1)) * self.scaling
+            result += lora_term
+        else:
+            # Standard/merged path
+            result = x @ self.weight.to(x.dtype).t()
+
         if self.bias is not None:
-            x = x.add_(self.bias.to(x.dtype))
-        return x
+            result = result.add_(self.bias.to(x.dtype))
+        return result
 
 #----------------------------------------------------------------------------
 # Convolutional layer with optional up/downsampling.
 
-class Conv2d(torch.nn.Module):
+class Conv2d(torch.nn.Module, LoRALayer):
     def __init__(self,
         in_channels, out_channels, kernel, bias=True, up=False, down=False,
         resample_filter=[1,1], fused_resample=False, init_mode='kaiming_normal', init_weight=1, init_bias=0,
+        lora_rank=0, lora_alpha=1, lora_dropout=0.0, merge_weights=True
     ):
         assert not (up and down)
-        super().__init__()
+        torch.nn.Module.__init__(self)
+        LoRALayer.__init__(self, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
+
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.up = up
@@ -73,12 +142,46 @@ class Conv2d(torch.nn.Module):
         f = f.ger(f).unsqueeze(0).unsqueeze(1) / f.sum().square()
         self.register_buffer('resample_filter', f if up or down else None)
 
+        if lora_rank > 0 and kernel > 0 and self.weight is not None and not self.up and not self.down:
+            # LoRA A: [Rank, In * K * K] - Compress input channels 
+            self.lora_A = nn.Parameter(self.weight.new_zeros((lora_rank, in_channels * kernel * kernel)))
+            # LoRA B: [Out, Rank] - Expand to output channels
+            self.lora_B = nn.Parameter(self.weight.new_zeros((out_channels, lora_rank)))
+            self.scaling = self.lora_alpha / self.r
+            self.weight.requires_grad = False
+            
+            # LoRA params init (Microsoft)
+            nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+            nn.init.zeros_(self.lora_B)
+
+    def train(self, mode: bool = True):
+        torch.nn.Module.train(self, mode)
+        if mode:
+            if self.merge_weights and self.merged:
+                if self.r > 0 and hasattr(self, 'lora_A'):
+                    delta = (self.lora_B @ self.lora_A).view(self.weight.shape) # Restore original weights
+                    self.weight.data -= delta * self.scaling
+                self.merged = False
+        else:
+            if self.merge_weights and not self.merged:
+                if self.r > 0 and hasattr(self, 'lora_A'):
+                    delta = (self.lora_B @ self.lora_A).view(self.weight.shape) # Merge weights
+                    self.weight.data += delta * self.scaling
+                self.merged = True
+
     def forward(self, x, N_views_xa=1):
         w = self.weight.to(x.dtype) if self.weight is not None else None
         b = self.bias.to(x.dtype) if self.bias is not None else None
         f = self.resample_filter.to(x.dtype) if self.resample_filter is not None else None
         w_pad = w.shape[-1] // 2 if w is not None else 0
         f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
+
+        # If LoRA is active, we modify the weight tensor before the conv op.        
+        if self.r > 0 and not self.merged and w is not None and hasattr(self, 'lora_A'):
+             # LoRA Delta = (B @ A) * scaling
+             lora_weight = (self.lora_B @ self.lora_A).view(w.shape)
+             w = w + lora_weight * self.scaling
+        # else: w remains standard self.weight 
 
         if self.fused_resample and self.up and w is not None:
             x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=max(f_pad - w_pad, 0))
@@ -205,21 +308,24 @@ class UNetBlock(torch.nn.Module):
         num_heads=None, channels_per_head=64, dropout=0, skip_scale=1, eps=1e-5,
         resample_filter=[1,1], resample_proj=False, adaptive_scale=True,
         init=dict(), init_zero=dict(init_weight=0), init_attn=None,
+        lora_rank=0, lora_alpha=1, lora_dropout=0.0
     ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         if emb_channels is not None:
-            self.affine = Linear(in_features=emb_channels, out_features=out_channels*(2 if adaptive_scale else 1), **init)
+            self.affine = Linear(in_features=emb_channels, out_features=out_channels*(2 if adaptive_scale else 1), **init, **lora_kwargs)
         self.num_heads = 0 if not attention else num_heads if num_heads is not None else out_channels // channels_per_head
         self.dropout = dropout
         self.skip_scale = skip_scale
         self.adaptive_scale = adaptive_scale
 
+        lora_kwargs = dict(lora_rank=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout)
+
         self.norm0 = GroupNorm(num_channels=in_channels, eps=eps)
-        self.conv0 = Conv2d(in_channels=in_channels, out_channels=out_channels, kernel=3, up=up, down=down, resample_filter=resample_filter, **init)
+        self.conv0 = Conv2d(in_channels=in_channels, out_channels=out_channels, kernel=3, up=up, down=down, resample_filter=resample_filter, **lora_kwargs, **init)
         self.norm1 = GroupNorm(num_channels=out_channels, eps=eps)
-        self.conv1 = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=3, **init_zero)
+        self.conv1 = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=3, **lora_kwargs, **init_zero)
 
         self.skip = None
         if out_channels != in_channels or up or down:
@@ -228,8 +334,8 @@ class UNetBlock(torch.nn.Module):
 
         if self.num_heads:
             self.norm2 = GroupNorm(num_channels=out_channels, eps=eps)
-            self.qkv = Conv2d(in_channels=out_channels, out_channels=out_channels*3, kernel=1, **(init_attn if init_attn is not None else init))
-            self.proj = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=1, **init_zero)
+            self.qkv = Conv2d(in_channels=out_channels, out_channels=out_channels*3, kernel=1, **lora_kwargs, **(init_attn if init_attn is not None else init))
+            self.proj = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=1, **lora_kwargs, **init_zero)
 
     def forward(self, x, emb=None, N_views_xa=1):
         orig = x
@@ -299,6 +405,10 @@ class SongUNet(nn.Module):
         encoder_type        = 'standard',   # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
         decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
         resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
+
+        lora_rank           = 0,             # Rank for LoRA adaptation, 0 means no LoRA.
+        lora_alpha          = 1,             # LoRA scaling factor.
+        lora_dropout        = 0.0            # LoRA dropout.
     ):
         assert embedding_type in ['fourier', 'positional']
         assert encoder_type in ['standard', 'skip', 'residual']
@@ -319,6 +429,7 @@ class SongUNet(nn.Module):
             emb_channels=emb_channels, num_heads=1, dropout=dropout, skip_scale=np.sqrt(0.5), eps=1e-6,
             resample_filter=resample_filter, resample_proj=True, adaptive_scale=False,
             init=init, init_zero=init_zero, init_attn=init_attn,
+            lora_rank=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout 
         )
 
         # Mapping.
@@ -441,6 +552,12 @@ class SingleImageSongUNetPredictor(nn.Module):
         else:
             emb_dim_in = 6 * cfg.cam_embd.dimension
 
+        # Default is no LoRA
+        use_lora = getattr(cfg.opt, "lora_finetune", False)
+        lora_rank = 4 if use_lora else 0
+        lora_alpha = getattr(cfg.opt, "lora_alpha", 1)
+        lora_dropout = getattr(cfg.opt, "lora_dropout", 0.0)
+
         self.encoder = SongUNet(cfg.data.training_resolution, 
                                 in_channels, 
                                 sum(out_channels),
@@ -448,7 +565,10 @@ class SingleImageSongUNetPredictor(nn.Module):
                                 num_blocks=cfg.model.num_blocks,
                                 emb_dim_in=emb_dim_in,
                                 channel_mult_noise=0,
-                                attn_resolutions=cfg.model.attention_resolutions)
+                                attn_resolutions=cfg.model.attention_resolutions,
+                                lora_rank=lora_rank,
+                                lora_alpha=lora_alpha,
+                                lora_dropout=lora_dropout) # Pass rank here
         self.out = nn.Conv2d(in_channels=sum(out_channels), 
                                  out_channels=sum(out_channels),
                                  kernel_size=1)

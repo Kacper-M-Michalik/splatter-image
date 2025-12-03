@@ -61,19 +61,53 @@ def main(cfg: DictConfig):
     # Create model   
     gaussian_predictor = GaussianSplatPredictor(cfg)
     gaussian_predictor = gaussian_predictor.to(memory_format=torch.channels_last)
-
-    # Prepare learning params
+    
     l = []
-    if cfg.model.network_with_offset:
-        l.append({'params': gaussian_predictor.network_with_offset.parameters(), 
-         'lr': cfg.opt.base_lr})
-    if cfg.model.network_without_offset:
-        l.append({'params': gaussian_predictor.network_wo_offset.parameters(), 
-         'lr': cfg.opt.base_lr})
-    optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, 
-                                 betas=cfg.opt.betas)
 
-    print("CWD: {}".format(vis_dir))
+    if cfg.opt.lora_finetune:
+        # Start by freezing the entire model
+        for param in gaussian_predictor.parameters():
+            param.requires_grad = False
+        
+        # Selective unfreeze, specific target layers
+        trainable_count = 0
+        for name, param in gaussian_predictor.named_parameters():
+            
+            # LoRA Adapters: Unfreeze weights explicitly named 
+            if "lora_" in name:
+                param.requires_grad = True
+                trainable_count += 1
+            
+            # Input convolution > 3 channels needs unfreezing
+            elif "enc" in name and "conv" in name and param.dim() == 4 and param.shape[1] > 3:
+                param.requires_grad = True
+                trainable_count += 1
+            
+            # Unfreezing biases in attention/projection layers
+            elif "bias" in name and param.ndim == 1:
+                parent = name.rsplit(".", 1)[0]
+                # BitFit (bias tuning parameters in the attention and mlp layers) 
+                if any(s in parent for s in ["qkv", "proj", "mlp", "up_proj", "down_proj"]):
+                    param.requires_grad = True
+                    trainable_count += 1
+
+        # Add only the unfrozen parameters to the optimizer (these are trainable)
+        l.append({'params': [p for p in gaussian_predictor.parameters() if p.requires_grad], 
+                  'lr': cfg.opt.base_lr})
+
+    # Standard training
+    else:
+        if cfg.model.network_with_offset:
+            l.append({'params': gaussian_predictor.network_with_offset.parameters(), 
+             'lr': cfg.opt.base_lr})
+        if cfg.model.network_without_offset:
+            l.append({'params': gaussian_predictor.network_wo_offset.parameters(), 
+             'lr': cfg.opt.base_lr})
+
+    optimizer = torch.optim.Adam(l, eps=1e-15, betas=cfg.opt.betas)
+
+    if fabric.is_global_zero:
+        print("CWD: {}".format(vis_dir))
   
     # Resuming training
     assert (cfg.opt.pretrained_ckpt is None or not cfg.opt.pretrained_hf), "Cannot set both pretrained_ckpt and pretrained_hf!"
@@ -84,9 +118,10 @@ def main(cfg: DictConfig):
             try:
                 gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
             except RuntimeError:
-                gaussian_predictor.load_state_dict(checkpoint["model_state_dict"],
-                                                strict=False)
-                print("Warning, model mismatch - was this expected?")
+                # Dimenson mismatch due to grafting check
+                print("Warning, model mismatch - attempting strict=False load (expected for grafted resumption).")
+                gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
+                
             first_iter = checkpoint["iteration"]
             best_PSNR = checkpoint["best_PSNR"] 
             print('Loaded model')
@@ -98,13 +133,11 @@ def main(cfg: DictConfig):
             try:
                 gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
             except RuntimeError:
-                gaussian_predictor.load_state_dict(checkpoint["model_state_dict"],
-                                                strict=False)
+                gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
             best_PSNR = checkpoint["best_PSNR"] 
             print('Loaded model from a pretrained checkpoint')
 
-        # Resume from HuggingFace pretrained weights, perform weight graft if now training with additional priors
-        elif cfg.opt.pretrained_hf:
+        elif cfg.opt.pretrained_hf: # Hugging Face pre trained weights
             category = cfg.data.category
             if category == "cars_priors":
                 category = "cars"
@@ -120,13 +153,11 @@ def main(cfg: DictConfig):
             
             checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-            # Check if new model uses priors
             if is_base_model(cfg):      
                 try:
                     gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
                 except RuntimeError:
                     gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
-                raise "old"
             else:                       
                 gaussian_predictor = graft_weights_with_channel_expansion(checkpoint["model_state_dict"], gaussian_predictor, old_cfg, cfg)
                 print("Grafting performed successfully")
@@ -136,10 +167,6 @@ def main(cfg: DictConfig):
                         
         else:
             best_PSNR = 0.0
-
-    if cfg.opt.lora_finetune:
-        # run peft
-        raise "test"
     
     # Set up Exponential Moving Average for training
     if cfg.opt.ema.use and fabric.is_global_zero:
@@ -163,9 +190,8 @@ def main(cfg: DictConfig):
     background = torch.tensor(bg_color, dtype=torch.float32)
     background = fabric.to_device(background)
 
-    # Get datasets
-    if cfg.data.category in ["nmr", "objaverse"]:
-        num_workers = 12
+    if cfg.data.category in ["nmr", "objaverse", "cars_priors"]:
+        num_workers = 8
         persistent_workers = True
     else:
         num_workers = 0
@@ -359,27 +385,24 @@ def main(cfg: DictConfig):
 
                     rot_transform_quats = vis_data["source_cv2wT_quat"][:, :cfg.data.input_images]
 
-                    input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
-                    if cfg.data.use_pred_depth:
-                        assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
-                        input_images = torch.cat([input_images,
-                                        vis_data["pred_depths"][:, :cfg.data.input_images, ...]],
-                                        dim=2)
-                    if cfg.data.use_pred_normal:
-                        assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
-                        input_images = torch.cat([input_images,
-                                        vis_data["pred_normals"][:, :cfg.data.input_images, ...]],
-                                        dim=2)
-
-                    # Get focal info and depth for CO3D data
                     if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
                         focals_pixels_pred = vis_data["focals_pixels"][:, :cfg.data.input_images, ...]
-                        input_images = torch.cat([input_images,
-                                        vis_data["origin_distances"][:, :cfg.data.input_images, ...]],
-                                        dim=2)
+                        input_images = torch.cat([vis_data["gt_images"][:, :cfg.data.input_images, ...],
+                                                vis_data["origin_distances"][:, :cfg.data.input_images, ...]],
+                                                dim=2)
                     else:
                         focals_pixels_pred = None
-                                          
+                        input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
+                        
+                        if cfg.data.use_pred_depth:
+                            input_images = torch.cat([input_images,
+                                            vis_data["pred_depths"][:, :cfg.data.input_images, ...]],
+                                            dim=2)
+                        if cfg.data.use_pred_normal:
+                            input_images = torch.cat([input_images,
+                                            vis_data["pred_normals"][:, :cfg.data.input_images, ...]],
+                                            dim=2)
+                            
                     gaussian_splats_vis = gaussian_predictor(input_images,
                                                         vis_data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                         rot_transform_quats,
@@ -454,6 +477,10 @@ def main(cfg: DictConfig):
                 torch.save(ckpt_save_dict, os.path.join(vis_dir, fname_to_save))
 
             gaussian_predictor.train()
+
+            for m in gaussian_predictor.modules():
+                if hasattr(m, "lora_A"):
+                    m.train() # Layers need to be in training mode
 
     wandb_run.finish()
 

@@ -52,9 +52,8 @@ def graft_weights_with_channel_expansion(old_state_dict, new_model, old_cfg, new
 
                 new_state_dict[name] = new_weights
             else:
-                 print(f"Warning: dimension mismatch (New: {new_param.shape}, Old: {old_param.shape})")
+                 print(f"Warning: Skipping graft for {name} due to dimension mismatch")
         else:
-            print("Failed to graft layer: {}, Old: {}, New: {}".format(name, old_param.shape, new_param.shape))
             raise Exception("Failed layer graft")
             
     new_model.load_state_dict(new_state_dict)
