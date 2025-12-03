@@ -6,36 +6,12 @@ import torchvision
 import numpy as np
 import torch
 from torch.nn.functional import silu
-
+import math
 from einops import rearrange, repeat
 
 from utils.general_utils import matrix_to_quaternion, quaternion_raw_multiply
 from utils.graphics_utils import fov2focal
 from utils.prior_utils import calc_channels
-
-import math
-
-
-# LoRA Class (From Microsoft loralib)
-# Should mix in with linear and conv2d layers
-class LoRALayer():
-    def __init__(
-        self, 
-        r: int, 
-        lora_alpha: int, 
-        lora_dropout: float,
-        merge_weights: bool,
-    ):
-        self.r = r
-        self.lora_alpha = lora_alpha
-        # Optional dropout (applied to input of LoRA branch)
-        if lora_dropout > 0.:
-            self.lora_dropout = nn.Dropout(p=lora_dropout)
-        else:
-            self.lora_dropout = lambda x: x
-        # Mark the weight as unmerged - separate from base weights
-        self.merged = False
-        self.merge_weights = merge_weights
 
 
 # U-Net implementation from EDM
@@ -59,62 +35,63 @@ def weight_init(shape, mode, fan_in, fan_out):
     if mode == 'kaiming_normal':  return np.sqrt(1 / fan_in) * torch.randn(*shape)
     raise ValueError(f'Invalid init mode "{mode}"')
 
+# ------------------------------
+# LoRA mixin (keeps LoRA params and config)
+class LoRALayer:
+    def __init__(self, r: int, lora_alpha: int, lora_dropout: float, merge_weights: bool = True):
+        self.r = int(r) if r is not None else 0 # rank
+        self.lora_alpha = lora_alpha
+        self.merge_weights = bool(merge_weights)
+        # dropout function for LoRA branch
+        if lora_dropout and lora_dropout > 0.0:
+            self.lora_dropout = nn.Dropout(p=lora_dropout)
+        else:
+            # identity for zero dropout
+            self.lora_dropout = lambda x: x
+        self._lora_merged = False  # track whether module has been fused/merged to base weights
+
+    @property
+    def has_lora(self):
+        return getattr(self, "r", 0) > 0 and hasattr(self, "lora_A") and hasattr(self, "lora_B")
 #----------------------------------------------------------------------------
 # Fully-connected layer.
 # Modified to inherit from LoRALayer for LoRA functionality.
-class Linear(torch.nn.Module, LoRALayer):
-    def __init__(self, in_features, out_features, bias=True, init_mode='kaiming_normal', init_weight=1, init_bias=0,
+class Linear(nn.Module, LoRALayer):
+    def __init__(self, in_features, out_features, bias=True,
+                 init_mode='kaiming_normal', init_weight=1, init_bias=0,
                  lora_rank=0, lora_alpha=1, lora_dropout=0.0, merge_weights=True):
-        torch.nn.Module.__init__(self)
+        nn.Module.__init__(self)
         LoRALayer.__init__(self, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
-        
+
         self.in_features = in_features
         self.out_features = out_features
         init_kwargs = dict(mode=init_mode, fan_in=in_features, fan_out=out_features)
-        self.weight = torch.nn.Parameter(weight_init([out_features, in_features], **init_kwargs) * init_weight)
-        self.bias = torch.nn.Parameter(weight_init([out_features], **init_kwargs) * init_bias) if bias else None
+        self.weight = nn.Parameter(torch.tensor(weight_init([out_features, in_features], **init_kwargs) * init_weight, dtype=torch.float32))
+        self.bias = nn.Parameter(torch.tensor(weight_init([out_features], **init_kwargs) * init_bias, dtype=torch.float32)) if bias else None
 
-        # Initialise trainable parameters
-        if lora_rank > 0:
-            # Create A and B matrices, input dim to rank, and rank to output dim
-            self.lora_A = nn.Parameter(self.weight.new_zeros((lora_rank, in_features)))
-            self.lora_B = nn.Parameter(self.weight.new_zeros((out_features, lora_rank)))
-            self.scaling = self.lora_alpha / self.r
-            # Freeze the pre-trained weight matrix
+        if self.r > 0:
+            # LoRA factors: A (r x in), B (out x r)
+            self.lora_A = nn.Parameter(self.weight.new_zeros((self.r, in_features)))
+            self.lora_B = nn.Parameter(self.weight.new_zeros((out_features, self.r)))
+            self.scaling = float(self.lora_alpha) / max(1, float(self.r))
+            # freeze base weight
             self.weight.requires_grad = False
             
             # Reset LoRA params (Microsoft init)
             nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
             nn.init.zeros_(self.lora_B)
 
-    def train(self, mode: bool = True):
-        torch.nn.Module.train(self, mode)
-        if mode:
-            if self.merge_weights and self.merged:
-                # Unmerge weights for training. A and B are independent.
-                if self.r > 0:
-                    self.weight.data -= (self.lora_B @ self.lora_A) * self.scaling
-                self.merged = False
-        else:
-            if self.merge_weights and not self.merged:
-                if self.r > 0:
-                    self.weight.data += (self.lora_B @ self.lora_A) * self.scaling
-                self.merged = True
-
     def forward(self, x):
-        # Implementation of Microsoft Linear forward logic
-        if self.r > 0 and not self.merged:
-            result = x @ self.weight.to(x.dtype).t()
-            
-            # LoRA branch calculation: dropout(x) @ A.T @ B.T * scaling
-            lora_term = (self.lora_dropout(x) @ self.lora_A.transpose(0, 1) @ self.lora_B.transpose(0, 1)) * self.scaling
-            result += lora_term
+        # x: (batch, in_features)
+        if self.r > 0 and self.has_lora and not self._lora_merged:
+            result = x @ self.weight.t()
+            # compute LoRA branch: (batch, in) @ A.T -> (batch, r) then @ B.T -> (batch, out)
+            lora_term = (self.lora_dropout(x) @ self.lora_A.t()) @ self.lora_B.t()
+            result = result + lora_term * self.scaling
         else:
-            # Standard/merged path
-            result = x @ self.weight.to(x.dtype).t()
-
+            result = x @ self.weight.t()
         if self.bias is not None:
-            result = result.add_(self.bias.to(x.dtype))
+            result = result + self.bias
         return result
 
 #----------------------------------------------------------------------------
@@ -127,7 +104,7 @@ class Conv2d(torch.nn.Module, LoRALayer):
         lora_rank=0, lora_alpha=1, lora_dropout=0.0, merge_weights=True
     ):
         assert not (up and down)
-        torch.nn.Module.__init__(self)
+        nn.Module.__init__(self)
         LoRALayer.__init__(self, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
 
         self.in_channels = in_channels
@@ -136,69 +113,81 @@ class Conv2d(torch.nn.Module, LoRALayer):
         self.down = down
         self.fused_resample = fused_resample
         init_kwargs = dict(mode=init_mode, fan_in=in_channels*kernel*kernel, fan_out=out_channels*kernel*kernel)
-        self.weight = torch.nn.Parameter(weight_init([out_channels, in_channels, kernel, kernel], **init_kwargs) * init_weight) if kernel else None
-        self.bias = torch.nn.Parameter(weight_init([out_channels], **init_kwargs) * init_bias) if kernel and bias else None
+        self.weight = nn.Parameter(torch.tensor(weight_init([out_channels, in_channels, kernel, kernel], **init_kwargs) * init_weight, dtype=torch.float32)) if kernel else None
+        self.bias = nn.Parameter(torch.tensor(weight_init([out_channels], **init_kwargs) * init_bias, dtype=torch.float32)) if kernel and bias else None
         f = torch.as_tensor(resample_filter, dtype=torch.float32)
         f = f.ger(f).unsqueeze(0).unsqueeze(1) / f.sum().square()
         self.register_buffer('resample_filter', f if up or down else None)
 
         if lora_rank > 0 and kernel > 0 and self.weight is not None and not self.up and not self.down:
-            # LoRA A: [Rank, In * K * K] - Compress input channels 
-            self.lora_A = nn.Parameter(self.weight.new_zeros((lora_rank, in_channels * kernel * kernel)))
-            # LoRA B: [Out, Rank] - Expand to output channels
-            self.lora_B = nn.Parameter(self.weight.new_zeros((out_channels, lora_rank)))
-            self.scaling = self.lora_alpha / self.r
+            # LoRA A: [r, in * k * k], LoRA B: [out, r]
+            self.lora_A = nn.Parameter(self.weight.new_zeros((self.r, in_channels * kernel * kernel)))
+            self.lora_B = nn.Parameter(self.weight.new_zeros((out_channels, self.r)))
+            self.scaling = float(lora_alpha) / max(1, float(self.r))
             self.weight.requires_grad = False
-            
-            # LoRA params init (Microsoft)
             nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
             nn.init.zeros_(self.lora_B)
 
-    def train(self, mode: bool = True):
-        torch.nn.Module.train(self, mode)
-        if mode:
-            if self.merge_weights and self.merged:
-                if self.r > 0 and hasattr(self, 'lora_A'):
-                    delta = (self.lora_B @ self.lora_A).view(self.weight.shape) # Restore original weights
-                    self.weight.data -= delta * self.scaling
-                self.merged = False
-        else:
-            if self.merge_weights and not self.merged:
-                if self.r > 0 and hasattr(self, 'lora_A'):
-                    delta = (self.lora_B @ self.lora_A).view(self.weight.shape) # Merge weights
-                    self.weight.data += delta * self.scaling
-                self.merged = True
-
     def forward(self, x, N_views_xa=1):
-        w = self.weight.to(x.dtype) if self.weight is not None else None
-        b = self.bias.to(x.dtype) if self.bias is not None else None
-        f = self.resample_filter.to(x.dtype) if self.resample_filter is not None else None
+        w = self.weight
+        b = self.bias
+        f = self.resample_filter if getattr(self, "resample_filter", None) is not None else None
         w_pad = w.shape[-1] // 2 if w is not None else 0
         f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
 
-        # If LoRA is active, we modify the weight tensor before the conv op.        
-        if self.r > 0 and not self.merged and w is not None and hasattr(self, 'lora_A'):
-             # LoRA Delta = (B @ A) * scaling
-             lora_weight = (self.lora_B @ self.lora_A).view(w.shape)
-             w = w + lora_weight * self.scaling
-        # else: w remains standard self.weight 
+        # if LoRA is not merged, create a temporary weight with added LoRA delta
+        if self.r > 0 and self.has_lora and not self._lora_merged:
+            # lora_A shape: (r, in * k * k). lora_B: (out, r)
+            # delta = (B @ A) -> shape (out, in * k * k) -> view to (out, in, k, k)
+            delta = (self.lora_B @ self.lora_A).view_as(w)
+            w_eff = w + delta * self.scaling
+        else:
+            w_eff = w
 
-        if self.fused_resample and self.up and w is not None:
-            x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=max(f_pad - w_pad, 0))
-            x = torch.nn.functional.conv2d(x, w, padding=max(w_pad - f_pad, 0))
-        elif self.fused_resample and self.down and w is not None:
-            x = torch.nn.functional.conv2d(x, w, padding=w_pad+f_pad)
-            x = torch.nn.functional.conv2d(x, f.tile([self.out_channels, 1, 1, 1]), groups=self.out_channels, stride=2)
+        if self.fused_resample and self.up and w_eff is not None:
+            x = F.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=max(f_pad - w_pad, 0))
+            x = F.conv2d(x, w_eff, padding=max(w_pad - f_pad, 0))
+        elif self.fused_resample and self.down and w_eff is not None:
+            x = F.conv2d(x, w_eff, padding=w_pad+f_pad)
+            x = F.conv2d(x, f.tile([self.out_channels, 1, 1, 1]), groups=self.out_channels, stride=2)
         else:
             if self.up:
-                x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=f_pad)
+                x = F.conv_transpose2d(x, f.mul(4).tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=f_pad)
             if self.down:
-                x = torch.nn.functional.conv2d(x, f.tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=f_pad)
-            if w is not None:
-                x = torch.nn.functional.conv2d(x, w, padding=w_pad)
+                x = F.conv2d(x, f.tile([self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=f_pad)
+            if w_eff is not None:
+                x = F.conv2d(x, w_eff, padding=w_pad)
         if b is not None:
-            x = x.add_(b.reshape(1, -1, 1, 1))
+            x = x + b.reshape(1, -1, 1, 1)
         return x
+
+#  Explicit definitions for fusing LoRA weights
+def merge_lora_weights(model: nn.Module):
+    for m in model.modules():
+        if isinstance(m, (Linear, Conv2d)) and m.has_lora and not getattr(m, "_lora_merged", False):
+            with torch.no_grad():
+                if isinstance(m, Linear):
+                    # delta = B @ A -> shape (out, in)
+                    delta = (m.lora_B @ m.lora_A).to(m.weight.dtype) * m.scaling
+                    m.weight.data += delta
+                    m._lora_merged = True
+                else:  # Conv2d
+                    delta = (m.lora_B @ m.lora_A).view_as(m.weight) * m.scaling
+                    m.weight.data += delta
+                    m._lora_merged = True
+
+def unmerge_lora_weights(model: nn.Module):
+    for m in model.modules():
+        if isinstance(m, (Linear, Conv2d)) and m.has_lora and getattr(m, "_lora_merged", False):
+            with torch.no_grad():
+                if isinstance(m, Linear):
+                    delta = (m.lora_B @ m.lora_A).to(m.weight.dtype) * m.scaling
+                    m.weight.data -= delta
+                    m._lora_merged = False
+                else:  # Conv2d
+                    delta = (m.lora_B @ m.lora_A).view_as(m.weight) * m.scaling
+                    m.weight.data -= delta
+                    m._lora_merged = False
 
 #----------------------------------------------------------------------------
 # Group normalization.
