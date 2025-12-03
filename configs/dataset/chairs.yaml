@@ -5,7 +5,9 @@ data:
   fov: 51.98948897809546
   category: chairs
   white_background: true
-  origin_distances: false
+  origin_distances: false  
+  use_pred_depth: false
+  use_pred_normal: false
 
 model:
   opacity_bias: -2.0

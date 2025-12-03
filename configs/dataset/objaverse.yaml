@@ -8,7 +8,9 @@ data:
   zfar: 3.2
   category: objaverse
   white_background: true
-  origin_distances: false
+  origin_distances: false  
+  use_pred_depth: false
+  use_pred_normal: false
   training_resolution: 128
   fov: 49.134342641202636
 

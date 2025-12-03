@@ -18,6 +18,7 @@ from gaussian_renderer import render_predicted
 from scene.gaussian_predictor import GaussianSplatPredictor
 from splatter_datasets.dataset_factory import get_dataset
 from utils.loss_utils import ssim as ssim_fn
+from utils.prior_utils import get_model_category
 
 class Metricator():
     def __init__(self, device):
@@ -86,12 +87,12 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, score_pat
 
         # Concatenate selected priors
         input_images = data["gt_images"][:, :model_cfg.data.input_images, ...]
-        if model_cfg.data.use_pred_depth:
+        if "use_pred_depth" in model_cfg.data and model_cfg.data.use_pred_depth:
             assert model_cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
             input_images = torch.cat([input_images,
                             data["pred_depths"][:, :model_cfg.data.input_images, ...]],
                             dim=2)
-        if model_cfg.data.use_pred_normal:
+        if "use_pred_normal" in model_cfg.data and model_cfg.data.use_pred_normal:
             assert model_cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
             input_images = torch.cat([input_images,
                             data["pred_normals"][:, :model_cfg.data.input_images, ...]],
@@ -269,14 +270,20 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
     torch.cuda.set_device(device)
 
     if args.experiment_path is None:
-        cfg_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", 
-                                 filename="config_{}.yaml".format(dataset_name))
-        if dataset_name in ["gso", "objaverse"]:
-            model_name = "latest"
+        if dataset_name in ["cars_priors"]:
+            cfg_path = hf_hub_download(repo_id="MVP-Group-Project/splatter-image-priors", 
+                                    filename="model-depth-normal/config_{}.yaml".format(dataset_name))
+            model_path = hf_hub_download(repo_id="MVP-Group-Project/splatter-image-priors",
+                                filename="model-depth-normal/model_best.pth")
         else:
-            model_name = dataset_name
-        model_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", 
-                            filename="model_{}.pth".format(model_name))
+            cfg_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", 
+                                    filename="config_{}.yaml".format(dataset_name))
+            if dataset_name in ["gso", "objaverse"]:
+                model_name = "latest"
+            else:
+                model_name = dataset_name
+            model_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", 
+                                filename="model_{}.pth".format(model_name))
         
     else:
         cfg_path = os.path.join(experiment_path, ".hydra", "config.yaml")
@@ -318,7 +325,7 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Evaluate model')
     parser.add_argument('dataset_name', type=str, help='Dataset to evaluate on', 
-                        choices=['objaverse', 'gso', 'cars', 'chairs', 'hydrants', 'teddybears', 'nmr'])
+                        choices=['objaverse', 'gso', 'cars', 'chairs', 'hydrants', 'teddybears', 'nmr', 'cars_priors'])
     parser.add_argument('--experiment_path', type=str, default=None, help='Path to the parent folder of the model. \
                         If set to None, a pretrained model will be downloaded')
     parser.add_argument('--split', type=str, default='test', choices=['test', 'val', 'vis', 'train'],

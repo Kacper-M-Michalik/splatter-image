@@ -5,4 +5,5 @@ data:
   category: hydrants
   white_background: false
   origin_distances: true
-
+  use_pred_depth: false
+  use_pred_normal: false

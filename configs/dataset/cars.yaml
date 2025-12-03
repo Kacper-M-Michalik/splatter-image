@@ -6,6 +6,8 @@ data:
   category: cars
   white_background: true
   origin_distances: false
+  use_pred_depth: false
+  use_pred_normal: false
 
 model:
   opacity_scale: 0.001

@@ -4,6 +4,7 @@ from .co3d import CO3DDataset
 from .nmr import NMRDataset
 from .objaverse import ObjaverseDataset
 from .gso import GSODataset
+from pathlib import Path
 
 SHAPENET_DATASET_ROOT = "/content/SRN" # Change this to your data directory
 CO3D_DATASET_ROOT = None # Change this to where you saved preprocessed data
@@ -14,7 +15,9 @@ GSO_ROOT = None # Change this to your data directory
 
 def get_dataset(cfg, name):
     if cfg.data.category == "cars" or cfg.data.category == "chairs":
-        assert SHAPENET_DATASET_ROOT is not None, "Update the location of the SRN Shapenet Dataset"        
+        assert SHAPENET_DATASET_ROOT is not None, "Update the location of the SRN Shapenet Dataset"  
+        path = Path(SHAPENET_DATASET_ROOT)      
+        assert path.exists(), "Path does not exist. You may have forgotten to downloaded/unzip the dataset?"
         return SRNDataset(cfg, SHAPENET_DATASET_ROOT, name)
     if cfg.data.category == "cars_priors":
         return SRNPriorsDataset(cfg, name)

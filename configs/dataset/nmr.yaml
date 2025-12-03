@@ -4,7 +4,9 @@ data:
   zfar: 4.0
   category: nmr
   white_background: true
-  origin_distances: false
+  origin_distances: false  
+  use_pred_depth: false
+  use_pred_normal: false
   training_resolution: 64
   fov: 29.999999290482176
 

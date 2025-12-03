@@ -20,6 +20,18 @@ def calc_channels(cfg):
 
     return in_channels
 
+def get_model_category(cfg):
+    name = "model"
+
+    if OmegaConf.select(cfg, "data.use_pred_depth") is True:
+        name += "-depth"
+    if OmegaConf.select(cfg, "data.use_pred_normal") is True:
+        name += "-normal"
+    if OmegaConf.select(cfg, "data.lora_finetune") is True:
+        name += "-finetune"    
+
+    return name
+
 def graft_weights_with_channel_expansion(old_state_dict, new_model, old_cfg, new_cfg):
     new_state_dict = new_model.state_dict()
 

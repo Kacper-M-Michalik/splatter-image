@@ -138,8 +138,7 @@ def main(cfg: DictConfig):
             best_PSNR = 0.0
 
     if cfg.opt.lora_finetune:
-        # run peft
-        raise "test"
+        raise "Please run train_netowrk_lora instead!"
     
     # Set up Exponential Moving Average for training
     if cfg.opt.ema.use and fabric.is_global_zero:
