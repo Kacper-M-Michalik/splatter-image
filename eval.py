@@ -268,13 +268,17 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
     device = torch.device("cuda:{}".format(device_idx))
     torch.cuda.set_device(device)
 
-    if args.experiment_path is None:
+    # Load pretrained model from HuggingFace if no local model specified
+    if args.experiment_path is None:        
+        # Eval run on the our new dataset with priors
         if dataset_name in ["cars_priors"]:
             cfg_path = hf_hub_download(repo_id="MVP-Group-Project/splatter-image-priors", 
                                     filename="model-depth-normal/config.yaml")
             model_path = hf_hub_download(repo_id="MVP-Group-Project/splatter-image-priors",
                                 filename="model-depth-normal/model_best.pth")
-        else:
+        
+        # Eval run on previous Splatter Image datasets
+        else:            
             cfg_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", 
                                     filename="config_{}.yaml".format(dataset_name))
             if dataset_name in ["gso", "objaverse"]:
