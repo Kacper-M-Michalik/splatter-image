@@ -272,7 +272,7 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
     if args.experiment_path is None:
         if dataset_name in ["cars_priors"]:
             cfg_path = hf_hub_download(repo_id="MVP-Group-Project/splatter-image-priors", 
-                                    filename="model-depth-normal/config_{}.yaml".format(dataset_name))
+                                    filename="model-depth-normal/config.yaml")
             model_path = hf_hub_download(repo_id="MVP-Group-Project/splatter-image-priors",
                                 filename="model-depth-normal/model_best.pth")
         else:

@@ -133,9 +133,11 @@ def main(cfg: DictConfig):
                    
             best_PSNR = checkpoint["best_PSNR"] 
             print('Loaded model from a pretrained Huggingface checkpoint')   
+            OmegaConf.save(config=cfg, f=os.path.join(vis_dir, "config.yaml"))
                         
         else:
-            best_PSNR = 0.0
+            best_PSNR = 0.0            
+            OmegaConf.save(config=cfg, f=os.path.join(vis_dir, "config.yaml"))
 
     if cfg.opt.lora_finetune:
         raise "Please run train_netowrk_lora instead!"
