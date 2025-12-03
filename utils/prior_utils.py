@@ -11,8 +11,10 @@ def is_base_model(cfg):
     return True
 
 def calc_channels(cfg):    
+    # Base RGB channels
     in_channels = 3
 
+    # Older configs may not have relvant options, select() returns None if the option is missing
     if OmegaConf.select(cfg, "data.use_pred_depth") is True:
         in_channels += 1
     if OmegaConf.select(cfg, "data.use_pred_normal") is True:

@@ -485,6 +485,7 @@ class GaussianSplatPredictor(nn.Module):
         # Calculate number of input channels        
         self.in_channels = calc_channels(cfg)
 
+        # Initialise correct model depending on if Gaussian mean offsets are to be calculated
         if cfg.model.network_with_offset:
             split_dimensions, scale_inits, bias_inits = self.get_splits_and_inits(True, cfg)
             self.network_with_offset = networkCallBack(cfg, 
