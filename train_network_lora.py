@@ -1,7 +1,7 @@
 import glob
 import hydra
 import os
-import wandb
+import wandb 
 
 import numpy as np
 import torch
@@ -20,7 +20,7 @@ import lpips as lpips_lib
 
 from eval import evaluate_dataset
 from gaussian_renderer import render_predicted
-from scene.gaussian_predictor import GaussianSplatPredictor
+from scene.gaussian_predictor_lora import GaussianSplatPredictor, merge_lora_weights, unmerge_lora_weights
 from splatter_datasets.dataset_factory import get_dataset
 
 @hydra.main(version_base=None, config_path='configs', config_name="default_config")
@@ -61,49 +61,71 @@ def main(cfg: DictConfig):
     # Create model   
     gaussian_predictor = GaussianSplatPredictor(cfg)
     gaussian_predictor = gaussian_predictor.to(memory_format=torch.channels_last)
-    
-    l = []
+    #
+    if fabric.is_global_zero:
+        if os.path.isfile(os.path.join(vis_dir, "model_latest.pth")):
+            print('Loading existing model from ', os.path.join(vis_dir, "model_latest.pth"))
+            checkpoint = torch.load(os.path.join(vis_dir, "model_latest.pth"), map_location=device, weights_only=False) 
+            try:
+                gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
+            except RuntimeError:
+                print("Warning, model mismatch")
+                gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
+            first_iter = checkpoint["iteration"]
+            best_PSNR = checkpoint["best_PSNR"] 
+            print('Loaded model')
+
+        elif cfg.opt.pretrained_ckpt is not None:
+            pretrained_ckpt_dir = os.path.join(cfg.opt.pretrained_ckpt, "model_latest.pth")
+            checkpoint = torch.load(pretrained_ckpt_dir, map_location=device, weights_only=False) 
+            try:
+                gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
+            except RuntimeError:
+                gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
+            best_PSNR = checkpoint["best_PSNR"] 
+            print('Loaded model from a pretrained checkpoint')
+
+        elif cfg.opt.pretrained_hf:
+            category = cfg.data.category
+            if category == "cars_priors":
+                category = "cars"
+
+            model_name = category if cfg.data.category not in ["gso","objaverse"] else "latest"
+
+            cfg_path  = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", filename=f"config_{category}.yaml")
+            model_path = hf_hub_download(repo_id="szymanowiczs/splatter-image-v1", filename=f"model_{model_name}.pth")
+            old_cfg = OmegaConf.load(cfg_path)
+            assert is_base_model(old_cfg)
+
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+
+            if is_base_model(cfg):   # no extra channels 
+                try:
+                    gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
+                except RuntimeError:
+                    gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
+            else:                   
+                gaussian_predictor = graft_weights_with_channel_expansion(
+                    checkpoint["model_state_dict"], gaussian_predictor, old_cfg, cfg
+                )
+                print("Grafting performed successfully")
+
+            best_PSNR = checkpoint["best_PSNR"]
+            print("Loaded model from HuggingFace pretrained weights")
+
+        else:
+            best_PSNR = 0.0
 
     if cfg.opt.lora_finetune:
-        # Start by freezing the entire model
-        for param in gaussian_predictor.parameters():
-            param.requires_grad = False
-        
-        # Selective unfreeze, specific target layers
-        trainable_count = 0
-        for name, param in gaussian_predictor.named_parameters():
-            
-            # LoRA Adapters: Unfreeze weights explicitly named 
-            if "lora_" in name:
-                param.requires_grad = True
-                trainable_count += 1
-            
-            # Input convolution > 3 channels needs unfreezing
-            elif "enc" in name and "conv" in name and param.dim() == 4 and param.shape[1] > 3:
-                param.requires_grad = True
-                trainable_count += 1
-            
-            # Unfreezing biases in attention/projection layers
-            elif "bias" in name and param.ndim == 1:
-                parent = name.rsplit(".", 1)[0]
-                # BitFit (bias tuning parameters in the attention and mlp layers) 
-                if any(s in parent for s in ["qkv", "proj", "mlp", "up_proj", "down_proj"]):
-                    param.requires_grad = True
-                    trainable_count += 1
-
-        # Add only the unfrozen parameters to the optimizer (these are trainable)
-        l.append({'params': [p for p in gaussian_predictor.parameters() if p.requires_grad], 
-                  'lr': cfg.opt.base_lr})
-
-    # Standard training
+        # LoRA finetuning, only finetuning adapters
+        for name, p in gaussian_predictor.named_parameters():
+            p.requires_grad = ("lora" in name.lower())
     else:
-        if cfg.model.network_with_offset:
-            l.append({'params': gaussian_predictor.network_with_offset.parameters(), 
-             'lr': cfg.opt.base_lr})
-        if cfg.model.network_without_offset:
-            l.append({'params': gaussian_predictor.network_wo_offset.parameters(), 
-             'lr': cfg.opt.base_lr})
+        # Fill finetune 
+        for p in gaussian_predictor.parameters():
+            p.requires_grad = True
 
+    trainable = [p for p in gaussian_predictor.parameters() if p.requires_grad]
     optimizer = torch.optim.Adam(l, eps=1e-15, betas=cfg.opt.betas)
 
     if fabric.is_global_zero:
@@ -118,8 +140,7 @@ def main(cfg: DictConfig):
             try:
                 gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
             except RuntimeError:
-                # Dimenson mismatch due to grafting check
-                print("Warning, model mismatch - attempting strict=False load (expected for grafted resumption).")
+                print("Warning, model mismatch")
                 gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
                 
             first_iter = checkpoint["iteration"]
@@ -180,6 +201,8 @@ def main(cfg: DictConfig):
         loss_fn = l2_loss
     elif cfg.opt.loss == "l1":
         loss_fn = l1_loss
+    else:
+        raise ValueError(f"Unknown loss: {cfg.opt.loss}")
 
     if cfg.opt.lambda_lpips != 0:
         lpips_fn = fabric.to_device(lpips_lib.LPIPS(net='vgg'))
@@ -190,8 +213,8 @@ def main(cfg: DictConfig):
     background = torch.tensor(bg_color, dtype=torch.float32)
     background = fabric.to_device(background)
 
-    if cfg.data.category in ["nmr", "objaverse", "cars_priors"]:
-        num_workers = 8
+    if cfg.data.category in ["nmr", "objaverse"]:
+        num_workers = 12
         persistent_workers = True
     else:
         num_workers = 0
@@ -230,8 +253,16 @@ def main(cfg: DictConfig):
     first_iter += 1
     iteration = first_iter
 
-    for num_epoch in range((cfg.opt.iterations + 1 - first_iter)// len(dataloader) + 1):
-        dataloader.sampler.set_epoch(num_epoch)        
+    # Set up validation CSV
+    if fabric.is_global_zero:
+        csv_path = os.path.join(vis_dir, "validation.csv")
+        if not os.path.isfile(csv_path):
+            with open(csv_path, "w+") as f:
+                f.write("iteration,PSNR_cond,SSIM_cond,LPIPS_cond,PSNR_novel,SSIM_novel,LPIPS_novel\n")
+
+    # ======== Main training loop ========
+    for num_epoch in range((cfg.opt.iterations + 1 - first_iter) // len(dataloader) + 1):
+        dataloader.sampler.set_epoch(num_epoch)
 
         for data in dataloader:
             iteration += 1
@@ -385,24 +416,29 @@ def main(cfg: DictConfig):
 
                     rot_transform_quats = vis_data["source_cv2wT_quat"][:, :cfg.data.input_images]
 
-                    if cfg.data.category == "hydrants" or cfg.data.category == "teddybears":
+                    input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
+                    if cfg.data.use_pred_depth:
+                        assert cfg.data.category == "cars_priors", "Dataset does not have predicted maps!"
+                        input_images = torch.cat(
+                            [input_images, vis_data["pred_depths"][:, :cfg.data.input_images, ...]],
+                            dim=2
+                        )
+                    if cfg.data.use_pred_normal:
+                        assert cfg.data.category == "cars_priors", "Dataset does not have predicted maps!"
+                        input_images = torch.cat(
+                            [input_images, vis_data["pred_normals"][:, :cfg.data.input_images, ...]],
+                            dim=2
+                        )
+
+                    if cfg.data.category in ["hydrants", "teddybears"]:
                         focals_pixels_pred = vis_data["focals_pixels"][:, :cfg.data.input_images, ...]
-                        input_images = torch.cat([vis_data["gt_images"][:, :cfg.data.input_images, ...],
-                                                vis_data["origin_distances"][:, :cfg.data.input_images, ...]],
-                                                dim=2)
+                        input_images = torch.cat(
+                            [input_images, vis_data["origin_distances"][:, :cfg.data.input_images, ...]],
+                            dim=2
+                        )
                     else:
                         focals_pixels_pred = None
-                        input_images = vis_data["gt_images"][:, :cfg.data.input_images, ...]
-                        
-                        if cfg.data.use_pred_depth:
-                            input_images = torch.cat([input_images,
-                                            vis_data["pred_depths"][:, :cfg.data.input_images, ...]],
-                                            dim=2)
-                        if cfg.data.use_pred_normal:
-                            input_images = torch.cat([input_images,
-                                            vis_data["pred_normals"][:, :cfg.data.input_images, ...]],
-                                            dim=2)
-                            
+
                     gaussian_splats_vis = gaussian_predictor(input_images,
                                                         vis_data["view_to_world_transforms"][:, :cfg.data.input_images, ...],
                                                         rot_transform_quats,
@@ -439,22 +475,48 @@ def main(cfg: DictConfig):
                 fnames_to_save.append("model_latest.pth")
             if (iteration + 1) % cfg.logging.val_log == 0 and fabric.is_global_zero:
                 torch.cuda.empty_cache()
-                print("\n[ITER {}] Validating".format(iteration + 1))
+                print("\n Validating iteration {}".format(iteration + 1))
+                merge_lora_weights(gaussian_predictor)
+                # Per-iteration scores file: scores_{X000}.txt
+                scores_txt_path = os.path.join(vis_dir, f"scores_{iteration + 1}.txt")
                 if cfg.opt.ema.use:
                     scores = evaluate_dataset(
                         ema, 
                         val_dataloader, 
                         device=device,
-                        model_cfg=cfg)
+                        model_cfg=cfg,
+                        save_vis=0,
+                        score_path=scores_txt_path,
+                        out_folder=None
+                    )
                 else:
                     scores = evaluate_dataset(
                         gaussian_predictor, 
                         val_dataloader, 
                         device=device,
-                        model_cfg=cfg)
+                        model_cfg=cfg,
+                        save_vis=0,
+                        score_path=scores_txt_path,
+                        out_folder=None
+                    )
+
+                unmerge_lora_weights(gaussian_predictor)
+
                 wandb.log(scores, step=iteration+1)
-                # save models - if the newest psnr is better than the best one,
-                # overwrite best_model. Always overwrite the latest model. 
+
+                # Append to a validation.csv (save per set of iterations))
+                try:
+                    if fabric.is_global_zero:
+                        with open(csv_path, "a+") as f:
+                            f.write(
+                                "{},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f}\n".format(
+                                    iteration + 1,
+                                    scores["PSNR_cond"], scores["SSIM_cond"], scores["LPIPS_cond"],
+                                    scores["PSNR_novel"], scores["SSIM_novel"], scores["LPIPS_novel"]
+                                )
+                            )
+                except Exception as e:
+                    print("Could not append to validation CSV:", e)
                 if scores["PSNR_novel"] > best_PSNR:
                     fnames_to_save.append("model_best.pth")
                     best_PSNR = scores["PSNR_novel"]
@@ -478,11 +540,8 @@ def main(cfg: DictConfig):
 
             gaussian_predictor.train()
 
-            for m in gaussian_predictor.modules():
-                if hasattr(m, "lora_A"):
-                    m.train() # Layers need to be in training mode
-
-    wandb_run.finish()
+    if fabric.is_global_zero:
+        wandb_run.finish()
 
 if __name__ == "__main__":
     main()
