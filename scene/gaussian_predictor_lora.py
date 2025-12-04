@@ -38,6 +38,18 @@ def weight_init(shape, mode, fan_in, fan_out):
 # ------------------------------
 # LoRA mixin (keeps LoRA params and config)
 class LoRALayer:
+    """
+    Implement Low-Rank Adaptation (Hu et al., 2021).
+    Instead of full-rank updates, we inject trainable rank-decomposition matrices A and B into the layer.
+    
+    Forward pass modification:
+        h = W0 @ x + (B @ A) @ x * scaling
+        
+    Where:
+        W0: Frozen pre-trained weights
+        A:  Trainable low-rank matrix (initialized with Gaussian)
+        B:  Trainable low-rank matrix (initialized to Zero)
+    """
     def __init__(self, r: int, lora_alpha: int, lora_dropout: float, merge_weights: bool = True):
         self.r = int(r) if r is not None else 0 # rank
         self.lora_alpha = lora_alpha
