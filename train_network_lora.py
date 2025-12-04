@@ -20,7 +20,7 @@ import lpips as lpips_lib
 
 from eval import evaluate_dataset
 from gaussian_renderer import render_predicted
-from scene.gaussian_predictor_lora import GaussianSplatPredictor, merge_lora_weights, unmerge_lora_weights
+from scene.gaussian_predictor_lora import GaussianSplatPredictor
 from splatter_datasets.dataset_factory import get_dataset
 
 @hydra.main(version_base=None, config_path='configs', config_name="default_config")
