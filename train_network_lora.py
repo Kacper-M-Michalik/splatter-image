@@ -99,12 +99,12 @@ def main(cfg: DictConfig):
 
             checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-            if is_base_model(cfg):   # no extra channels 
+            if is_base_model(cfg):   # no extra channels → direct load
                 try:
                     gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
                 except RuntimeError:
                     gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
-            else:                   
+            else:                    # depth/normals → graft expanded weights
                 gaussian_predictor = graft_weights_with_channel_expansion(
                     checkpoint["model_state_dict"], gaussian_predictor, old_cfg, cfg
                 )
@@ -126,7 +126,8 @@ def main(cfg: DictConfig):
             p.requires_grad = True
 
     trainable = [p for p in gaussian_predictor.parameters() if p.requires_grad]
-    optimizer = torch.optim.Adam(l, eps=1e-15, betas=cfg.opt.betas)
+    optimizer = torch.optim.Adam(trainable, lr=cfg.opt.base_lr, eps=1e-15, betas=cfg.opt.betas)
+
 
     if fabric.is_global_zero:
         print("CWD: {}".format(vis_dir))
@@ -476,7 +477,7 @@ def main(cfg: DictConfig):
             if (iteration + 1) % cfg.logging.val_log == 0 and fabric.is_global_zero:
                 torch.cuda.empty_cache()
                 print("\n Validating iteration {}".format(iteration + 1))
-                merge_lora_weights(gaussian_predictor)
+                # Removed merge_lora_weights(gaussian_predictor)
                 # Per-iteration scores file: scores_{X000}.txt
                 scores_txt_path = os.path.join(vis_dir, f"scores_{iteration + 1}.txt")
                 if cfg.opt.ema.use:
@@ -499,8 +500,6 @@ def main(cfg: DictConfig):
                         score_path=scores_txt_path,
                         out_folder=None
                     )
-
-                unmerge_lora_weights(gaussian_predictor)
 
                 wandb.log(scores, step=iteration+1)
 
