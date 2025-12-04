@@ -126,7 +126,6 @@ def main(cfg: DictConfig):
                     gaussian_predictor.load_state_dict(checkpoint["model_state_dict"])
                 except RuntimeError:
                     gaussian_predictor.load_state_dict(checkpoint["model_state_dict"], strict=False)
-                raise "old"
             else:                       
                 gaussian_predictor = graft_weights_with_channel_expansion(checkpoint["model_state_dict"], gaussian_predictor, old_cfg, cfg)
                 print("Grafting performed successfully")
