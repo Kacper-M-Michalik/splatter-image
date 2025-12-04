@@ -13,11 +13,14 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getView2Wo
 
 from .shared_dataset import SharedDataset
 
+# Efficiently convert a HuggingFace dataset into pandas dataframe grouped by uuid and then 
+# sorted by frame_id 
 def process_and_chunk(hf_dataset, uuids):
     df = hf_dataset.to_pandas()    
     df = df[df['uuid'].isin(uuids)]    
     grouped = {uuid: group.sort_values(by=['frame_id']) for uuid, group in df.groupby('uuid')}
 
+    # Immediately deallocate the large dataframe to reduce memory usage
     del df
     return grouped
 
@@ -59,9 +62,11 @@ class SRNPriorsDataset(SharedDataset):
         )
         print("Downloaded datasets")
 
+        # Convert intrinsics files to a dataframe for performance reasons
         pre_dataset_intrins = dataset_intrins.to_pandas()
         pre_dataset_intrins.sort_values(by=["uuid"], ascending=[True], inplace=True)
 
+        # Calculate dataset length
         assert len(dataset_poses) == len(dataset_rgbs)
         if cfg.data.subset != -1:
             assert cfg.data.subset > 0
@@ -73,6 +78,7 @@ class SRNPriorsDataset(SharedDataset):
         self.dataset_intrins = pre_dataset_intrins.iloc[:self.subset_length]
         uuids = set(self.dataset_intrins['uuid'].unique())    
 
+        # Convert remaining HF datasets to dataframes indexed by uuid
         self.dataset_poses = process_and_chunk(dataset_poses, uuids)
         print("Converted poses")
         self.dataset_rgbs = process_and_chunk(dataset_rgbs, uuids)
@@ -119,6 +125,7 @@ class SRNPriorsDataset(SharedDataset):
             self.all_full_proj_transforms = {}
             self.all_camera_centers = {}
 
+        # Cache retrieved items
         if uuid not in self.all_rgbs.keys():            
             self.all_rgbs[uuid] = []
             self.all_depths[uuid] = []
@@ -128,11 +135,14 @@ class SRNPriorsDataset(SharedDataset):
             self.all_camera_centers[uuid] = []
             self.all_view_to_world_transforms[uuid] = []
 
+            # Convert data from dataframes into appropriate datatypes and calculate 
+            # relevant projections/transforms and metadata
             cam_infos = readCamerasWithPriorsFromHF(self.dataset_poses[uuid],
                                                     self.dataset_rgbs[uuid], 
                                                     self.dataset_depths[uuid], 
                                                     self.dataset_normals[uuid])
             
+            # Remove dataframes with original dataset data as processed copies are now stored in memory
             del self.dataset_poses[uuid]
             del self.dataset_rgbs[uuid]
             del self.dataset_depths[uuid]
@@ -145,7 +155,7 @@ class SRNPriorsDataset(SharedDataset):
                 assert cam_info.width == self.cfg.data.training_resolution
                 assert cam_info.height == self.cfg.data.training_resolution
 
-                # We store everything as the uint8's due to memory usage problems, we recompute the floats on the go in __getitem__
+                # We store everything as uint8's due to memory usage problems, we recompute the floats on the go in __getitem__
                 image = cam_info.rgb_image.view(3, cam_info.height, cam_info.width)
                 self.all_rgbs[uuid].append(image)
                 
@@ -175,6 +185,7 @@ class SRNPriorsDataset(SharedDataset):
             self.all_depths[uuid] = torch.stack(self.all_depths[uuid])
             self.all_normals[uuid] = torch.stack(self.all_normals[uuid])
 
+    # Get permutation of images and associated data from dataset
     def __getitem__(self, index):  
         uuid = self.dataset_intrins.iloc[index]['uuid']
         self.load_example_id(index)
@@ -192,6 +203,7 @@ class SRNPriorsDataset(SharedDataset):
             frame_idxs = torch.cat([torch.tensor(input_idxs), 
                                     torch.tensor([i for i in range(251) if i not in input_idxs])], dim=0) 
 
+        # Dictionary expected as batch entry in prior/dataset processing scripts
         images_and_camera_poses = {
             "gt_images": (self.all_rgbs[uuid][frame_idxs].float() / 255.0).clamp(0.0, 1.0),
             "pred_depths": (self.all_depths[uuid][frame_idxs].float() / 255.0).clamp(0.0, 1.0),

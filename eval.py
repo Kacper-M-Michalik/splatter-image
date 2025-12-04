@@ -52,7 +52,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, score_pat
     bg_color = [1, 1, 1] if model_cfg.data.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-    # Instantiate metricator
+    # Instantiate metric calculator
     metricator = Metricator(device)
 
     psnr_all_examples_novel = []
@@ -264,7 +264,7 @@ def eval_robustness(model, dataloader, device, model_cfg, out_folder=None):
 @torch.no_grad()
 def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, out_folder=None):
     
-    # set device and random seed
+    # Set device and random seed
     device = torch.device("cuda:{}".format(device_idx))
     torch.cuda.set_device(device)
 
@@ -292,10 +292,10 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
         cfg_path = os.path.join(experiment_path, ".hydra", "config.yaml")
         model_path = os.path.join(experiment_path, "model_latest.pth")
     
-    # load cfg
+    # Load training configuration
     training_cfg = OmegaConf.load(cfg_path)
 
-    # check that training and testing datasets match if not using official models 
+    # Check that training and testing datasets match if not using official models 
     if args.experiment_path is not None:
         if dataset_name == "gso":
             # GSO model must have been trained on objaverse
@@ -303,7 +303,7 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
         else:
             assert training_cfg.data.category == dataset_name, "Model-dataset mismatch"
 
-    # load model
+    # Load model
     model = GaussianSplatPredictor(training_cfg)
     ckpt_loaded = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt_loaded["model_state_dict"])
@@ -311,10 +311,10 @@ def main(dataset_name, experiment_path, device_idx, split='test', save_vis=0, ou
     model.eval()
     print('Loaded model!')
 
-    # override dataset in cfg if testing objaverse model
+    # Override dataset in cfg if testing objaverse model
     if training_cfg.data.category == "objaverse" and split in ["test", "vis"]:
         training_cfg.data.category = "gso"
-    # instantiate dataset loader
+    # Instantiate dataset loader
     dataset = get_dataset(training_cfg, split)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False,
                             persistent_workers=True, pin_memory=True, num_workers=1)
@@ -360,7 +360,7 @@ if __name__ == "__main__":
         print("Not saving any renders (only computing scores). To save renders use flag --save_vis")
 
     scores = main(dataset_name, experiment_path, 0, split=split, save_vis=save_vis, out_folder=out_folder)
-    # save scores to json in the experiment folder if appropriate split was used
+    # Save scores to json in the experiment folder if appropriate split was used
     if split != "vis":
         if experiment_path is not None:
             score_out_path = os.path.join(experiment_path, 

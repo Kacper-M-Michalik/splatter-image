@@ -20,6 +20,7 @@ def get_dataset(cfg, name):
         assert path.exists(), "Path does not exist. You may have forgotten to downloaded/unzip the dataset?"
         return SRNDataset(cfg, SHAPENET_DATASET_ROOT, name)
     if cfg.data.category == "cars_priors":
+        # Our dataset does not require a local path as it is downloaded from HuggingFace, so no assertions are made
         return SRNPriorsDataset(cfg, name)
     elif cfg.data.category == "hydrants" or cfg.data.category == "teddybears":        
         assert CO3D_DATASET_ROOT is not None, "Update the location of the CO3D Dataset"
