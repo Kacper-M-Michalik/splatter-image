@@ -35,7 +35,7 @@ def evaluate_dataset(model, dataloader, device, model_cfg, save_vis=0, score_pat
     Computes, prints and saves PSNR, SSIM, LPIPS.
     Args:
         save_vis: how many examples will have visualisations saved
-        sccore_path: where to store scores
+        score_path: where to store scores
     """
 
     # Make folder for output images
