@@ -128,7 +128,7 @@ def main(cfg: DictConfig):
         for name, p in gaussian_predictor.named_parameters():
             p.requires_grad = ("lora" in name.lower())
     else:
-        # Fill finetune 
+        # Full finetune 
         for p in gaussian_predictor.parameters():
             p.requires_grad = True
 
@@ -139,8 +139,6 @@ def main(cfg: DictConfig):
         eps=1e-15,
         betas=cfg.opt.betas
     )
-    print(f">> Trainable parameters: {sum(p.numel() for p in trainable):,}")
-    print(f">> Frozen parameters:    {sum(p.numel() for p in gaussian_predictor.parameters() if not p.requires_grad):,}")
 
     # Set up Exponential Moving Average for training
     if cfg.opt.ema.use and fabric.is_global_zero:
