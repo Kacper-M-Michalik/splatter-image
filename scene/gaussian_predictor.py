@@ -703,13 +703,14 @@ class GaussianSplatPredictor(nn.Module):
         else:
             N_views_xa = 1
 
+        # Get embedding for modulation
         film_emb = None
-        # Get camera embedding
         if self.cfg.cam_embd.embedding is not None:
             if "custom_embedding" in self.cfg.data and self.cfg.data.custom_embedding:
                 assert custom_emb is not None
                 film_emb = custom_emb
             else:    
+                # Get camera embedding
                 cam_embedding = self.get_camera_embeddings(source_cameras_view_to_world)
                 assert self.cfg.cam_embd.method == "film"
                 film_emb = cam_embedding.reshape(B*N_views, cam_embedding.shape[2])
