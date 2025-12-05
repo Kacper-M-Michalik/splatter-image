@@ -276,12 +276,12 @@ def main(cfg: DictConfig):
             # Concatenate selected priors
             input_images = data["gt_images"][:, :cfg.data.input_images, ...]
             if cfg.data.use_pred_depth:
-                assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
+                assert cfg.data.category == "cars_priors", "Dataset does not have predicted maps!"
                 input_images = torch.cat([input_images,
                                 data["pred_depths"][:, :cfg.data.input_images, ...]],
                                 dim=2)
             if cfg.data.use_pred_normal:
-                assert cfg.data.category == "cars_priors", "Dataset does not have predicated maps!"
+                assert cfg.data.category == "cars_priors", "Dataset does not have predicted maps!"
                 input_images = torch.cat([input_images,
                                 data["pred_normals"][:, :cfg.data.input_images, ...]],
                                 dim=2)
@@ -477,7 +477,6 @@ def main(cfg: DictConfig):
             if (iteration + 1) % cfg.logging.val_log == 0 and fabric.is_global_zero:
                 torch.cuda.empty_cache()
                 print("\n Validating iteration {}".format(iteration + 1))
-                # Removed merge_lora_weights(gaussian_predictor)
                 # Per-iteration scores file: scores_{X000}.txt
                 scores_txt_path = os.path.join(vis_dir, f"scores_{iteration + 1}.txt")
                 if cfg.opt.ema.use:

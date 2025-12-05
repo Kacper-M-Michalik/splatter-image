@@ -46,9 +46,6 @@ def weight_init(shape, mode, fan_in, fan_out):
 #         W0: Frozen pre-trained weights
 #         A:  Trainable low-rank matrix (initialized with Gaussian)
 #         B:  Trainable low-rank matrix (initialized to Zero)
-
-
-
 class LoRALayer:
     def __init__(self, r: int, lora_alpha: int, lora_dropout: float, merge_weights: bool = True):
         self.r = int(r) if r is not None else 0 # rank
