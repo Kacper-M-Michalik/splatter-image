@@ -16,6 +16,7 @@ data:
   origin_distances: false
   use_pred_depth : false
   use_pred_normal : false
+  custom_embedding : false
 opt:
   iterations: 800001
   base_lr: 0.00005

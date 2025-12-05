@@ -692,7 +692,8 @@ class GaussianSplatPredictor(nn.Module):
                 source_cameras_view_to_world, 
                 source_cv2wT_quat=None,
                 focals_pixels=None,
-                activate_output=True):
+                activate_output=True,
+                custom_emb = None):
 
         B = x.shape[0]
         N_views = x.shape[1]
@@ -702,13 +703,16 @@ class GaussianSplatPredictor(nn.Module):
         else:
             N_views_xa = 1
 
+        film_emb = None
         # Get camera embedding
         if self.cfg.cam_embd.embedding is not None:
-            cam_embedding = self.get_camera_embeddings(source_cameras_view_to_world)
-            assert self.cfg.cam_embd.method == "film"
-            film_camera_emb = cam_embedding.reshape(B*N_views, cam_embedding.shape[2])
-        else:
-            film_camera_emb = None
+            if "custom_embedding" in self.cfg.data and self.cfg.data.custom_embedding:
+                assert custom_emb is not None
+                film_emb = custom_emb
+            else:    
+                cam_embedding = self.get_camera_embeddings(source_cameras_view_to_world)
+                assert self.cfg.cam_embd.method == "film"
+                film_emb = cam_embedding.reshape(B*N_views, cam_embedding.shape[2])
 
         # Get focal data
         if self.cfg.data.category in ["hydrants", "teddybears"]:
@@ -732,7 +736,7 @@ class GaussianSplatPredictor(nn.Module):
         if self.cfg.model.network_with_offset:
 
             split_network_outputs = self.network_with_offset(x,
-                                                             film_camera_emb=film_camera_emb,
+                                                             film_camera_emb=film_emb,
                                                              N_views_xa=N_views_xa
                                                              )
 
@@ -745,7 +749,7 @@ class GaussianSplatPredictor(nn.Module):
 
         else:
             split_network_outputs = self.network_wo_offset(x, 
-                                                           film_camera_emb=film_camera_emb,
+                                                           film_camera_emb=film_emb,
                                                            N_views_xa=N_views_xa
                                                            ).split(self.split_dimensions_without_offset, dim=1)
 
